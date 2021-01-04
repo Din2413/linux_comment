@@ -411,6 +411,12 @@ static inline int zone_is_oom_locked(const struct zone *zone)
  * [0 .. MAX_NR_ZONES -1] 		: Zonelists with fallback
  * [MAZ_NR_ZONES ... MAZ_ZONELISTS -1]  : No fallback (GFP_THISNODE)
  */
+/*
+ * 非一致性内存访问NUMA中，MAX_ZONELISTS值为2*MAX_NR_ZONES
+ * NUMA的node_zonelists由两部分组成
+ * 前半部分指备选结点管理区列表，当自身管理区不满足分配时从备选列表尝试分配
+ * 后半部分指自身结点管理区列表
+ */
 #define MAX_ZONELISTS (2 * MAX_NR_ZONES)
 
 
@@ -479,6 +485,10 @@ struct zonelist_cache {
 	unsigned long last_full_zap;		/* when last zap'd (jiffies) */
 };
 #else
+/*
+ * 一致性内存访问UMA中，MAX_ZONELISTS值则为MAX_NR_ZONES
+ * UMA的node_zonelists只包含自身结点管理区
+ */
 #define MAX_ZONELISTS MAX_NR_ZONES
 struct zonelist_cache;
 #endif
@@ -559,6 +569,19 @@ typedef struct pglist_data {
 	 * 每个内存结点又被分成管理区，对应struct zone结构
 	 */
 	struct zone node_zones[MAX_NR_ZONES];
+	/*
+	 * 一致性内存访问UMA中，只存在一个结点，所有zone成员均在node_zones中存放
+	 * 而对于非一致性内存访问UNMA而言，除本地结点，还可能存在多个远端内存结点
+	 * 本地内存结点并不会存放远端内存结点得管理区zone信息，因此引入zonelists概念
+	 * 将远端内存结点和本地内存结点统一挂在zonelist链表上
+	 *
+	 * NUMA中，MAX_ZONELISTS值为2*MAX_NR_ZONES，node_zonelists由两部分组成
+	 * 前半部分指备选结点管理区列表，当自身管理区不满足分配时从备选列表尝试分配
+	 * 后半部分指自身结点管理区列表
+	 *
+	 * UMA中，MAX_ZONELISTS值则为MAX_NR_ZONES，node_zonelists只包含自身结点管理区
+	 */
+	/* ??????备选结点如何选择?????? */
 	struct zonelist node_zonelists[MAX_ZONELISTS];
 	/* 该结点划分的管理区个数 */
 	int nr_zones;

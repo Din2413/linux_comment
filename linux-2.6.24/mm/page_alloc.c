@@ -1917,8 +1917,22 @@ static int build_zonelists_node(pg_data_t *pgdat, struct zonelist *zonelist,
  *  If not NUMA, ZONELIST_ORDER_ZONE and ZONELIST_ORDER_NODE will create
  *  the same zonelist. So only NUMA can configure this param.
  */
+/*
+ * 结点zonelist默认排列顺序
+ * 由系统智能选择ZONELIST_ORDER_NODE或ZONELIST_ORDER_ZONE方式
+ */
 #define ZONELIST_ORDER_DEFAULT  0
+/*
+ * 按结点顺序依次排列
+ * 先排列本地结点的所有ZONE，再排列其他结点的所有ZONE
+ * 如：highmem(node0)->normal(node0)->dma(node0)->highmem(node1)...
+ */
 #define ZONELIST_ORDER_NODE     1
+/*
+ * 按ZONE类型从高到低依次排列
+ * 先排列各结点高类型ZONE，再排列各结点低类型ZONE
+ * 如：highmem(node0)->highmem(node1)->normal(node0)->normal(node1)...
+ */
 #define ZONELIST_ORDER_ZONE     2
 
 /* zonelist order in the kernel.
@@ -2187,8 +2201,13 @@ static int default_zonelist_order(void)
 	return ZONELIST_ORDER_ZONE;
 }
 
+/* NUMA设置结点zonelist排列顺序接口 */
 static void set_zonelist_order(void)
 {
+	/*
+	 * 1、当前排列方式是默认方式，则由系统选择一个最优的排列方式
+	 * 2、当前排列当时不是默认方式，则设置为user_zonelist_order指定的排列方式
+	 */
 	if (user_zonelist_order == ZONELIST_ORDER_DEFAULT)
 		current_zonelist_order = default_zonelist_order();
 	else
@@ -2202,6 +2221,7 @@ static void build_zonelists(pg_data_t *pgdat)
 	nodemask_t used_mask;
 	int local_node, prev_node;
 	struct zonelist *zonelist;
+	/* 由set_zonelist_order设置的结点内存与排列方式 */
 	int order = current_zonelist_order;
 
 	/* initialize zonelists */
@@ -2212,6 +2232,7 @@ static void build_zonelists(pg_data_t *pgdat)
 
 	/* NUMA-aware ordering of nodes */
 	local_node = pgdat->node_id;
+	/* online结点数量 */
 	load = num_online_nodes();
 	prev_node = local_node;
 	nodes_clear(used_mask);
@@ -2275,8 +2296,14 @@ static void build_zonelist_cache(pg_data_t *pgdat)
 
 #else	/* CONFIG_NUMA */
 
+/* UMA系统设置结点zonelist排列方式接口 */
 static void set_zonelist_order(void)
 {
+	/*
+	 * UMA系统只存在一个内存结点
+	 * 排列方式设置为ZONELIST_ORDER_NODE和ZONELIST_ORDER_ZONE结构相同
+	 * 因此直接配置结点排列方式为ZONE方式
+	 */
 	current_zonelist_order = ZONELIST_ORDER_ZONE;
 }
 
@@ -2331,6 +2358,7 @@ static int __build_all_zonelists(void *dummy)
 {
 	int nid;
 
+	/* 遍历所有online结点创建zonelist */
 	for_each_online_node(nid) {
 		pg_data_t *pgdat = NODE_DATA(nid);
 
@@ -2342,8 +2370,13 @@ static int __build_all_zonelists(void *dummy)
 
 void build_all_zonelists(void)
 {
+	/* 设置zonelist结点和内存管理区的组织形式 */
 	set_zonelist_order();
 
+	/*
+	 * system_state为系统全局定义、表示当前运行状态的枚举变量
+	 * 如果运行状态为SYSTEM_BOOTING，则调用__build_all_zonelists初始结点zonelist
+	 */
 	if (system_state == SYSTEM_BOOTING) {
 		__build_all_zonelists(NULL);
 		cpuset_init_current_mems_allowed();
