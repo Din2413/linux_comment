@@ -3033,6 +3033,7 @@ void __meminit get_pfn_range_for_nid(unsigned int nid,
  * assumption is made that zones within a node are ordered in monotonic
  * increasing memory addresses so that the "highest" populated zone is used
  */
+/* 从最高的内存管理区查询是否可划分ZONE_MOVABLE虚拟管理区 */
 void __init find_usable_zone_for_movable(void)
 {
 	int zone_index;
@@ -3707,6 +3708,7 @@ void __init find_zone_movable_pfns_for_nodes(unsigned long *movable_pfn)
 	}
 
 	/* If kernelcore was not specified, there is no ZONE_MOVABLE */
+	/*  */
 	if (!required_kernelcore)
 		return;
 
@@ -3961,6 +3963,10 @@ void __init set_dma_reserve(unsigned long new_dma_reserve)
 
 #ifndef CONFIG_NEED_MULTIPLE_NODES
 static bootmem_data_t contig_bootmem_data;
+/*
+ * 对于一致性内存访问UMA，只存在一个内存结点
+ * 使用静态变量contig_page_data表示结点结构
+ */
 struct pglist_data contig_page_data = { .bdata = &contig_bootmem_data };
 
 EXPORT_SYMBOL(contig_page_data);

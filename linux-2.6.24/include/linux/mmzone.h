@@ -129,6 +129,7 @@ struct per_cpu_pageset {
 #define zone_pcp(__z, __cpu) (&(__z)->pageset[(__cpu)])
 #endif
 
+/* 管理区类型，不同管理区类型适合不同类型的用途 */
 enum zone_type {
 #ifdef CONFIG_ZONE_DMA
 	/*
@@ -149,6 +150,10 @@ enum zone_type {
 	 * i386, x86_64 and multiple other arches
 	 * 			<16M.
 	 */
+	/*
+	 * 一些设备无法使用DMA访问所有物理内存地址
+	 * 因此特定划分出该内存区域专门用于特殊DMA访问
+	 */
 	ZONE_DMA,
 #endif
 #ifdef CONFIG_ZONE_DMA32
@@ -157,6 +162,7 @@ enum zone_type {
 	 * only able to do DMA to the lower 16M but also 32 bit devices that
 	 * can only do DMA areas below 4G.
 	 */
+	/* 服务于x86_64体系结构的第二个DMA直接内存寻址区域 */
 	ZONE_DMA32,
 #endif
 	/*
@@ -164,6 +170,7 @@ enum zone_type {
 	 * performed on pages in ZONE_NORMAL if the DMA devices support
 	 * transfers to all addressable memory.
 	 */
+	/* 可直接线性映射到内核地址空间，内核可直接访问 */
 	ZONE_NORMAL,
 #ifdef CONFIG_HIGHMEM
 	/*
@@ -174,8 +181,16 @@ enum zone_type {
 	 * table entries on i386) for each page that the kernel needs to
 	 * access.
 	 */
+	/*
+	 * 高端内存管理区，需要内核进行map之后才能访问
+	 * 对于64位体系结构，地址空间足够线性映射所有物理内存，因此一般不需要高端内存
+	 */
 	ZONE_HIGHMEM,
 #endif
+	/*
+	 * 可迁移内存管理区，一般是从高端内存管理区划分而来的虚拟管理区，不额外占用内存空间
+	 * 引入该区域的目的是减少内存碎片，优化内存迁移场景，将Non-Movable和Movable的内存分区管理
+	 */
 	ZONE_MOVABLE,
 	MAX_NR_ZONES
 };
@@ -529,9 +544,23 @@ extern struct page *mem_map;
  * per-zone basis.
  */
 struct bootmem_data;
+/*
+ * 非一致性内存访问NUMA中，内存被分成许多簇
+ * 依据簇与处理器“距离”的不同，访问不同的簇花费代价也不同
+ * 每个簇又被认为是一个结点，对应struct pglist_data结构
+ */
 typedef struct pglist_data {
+	/*
+	 * 实际计算机体系结构存在诸多限制
+	 * 1、ISA总线的直接内存寻址DMA只能对RAM的前16MB寻址
+	 * 2、在具有大容量RAM的32位计算机中CPU无法直接通过逻辑地址线性映射到所有的物理地址
+	 *
+	 * 因此，Linux内核需对不同内存区域采用不同管理方法和映射机制
+	 * 每个内存结点又被分成管理区，对应struct zone结构
+	 */
 	struct zone node_zones[MAX_NR_ZONES];
 	struct zonelist node_zonelists[MAX_ZONELISTS];
+	/* 该结点划分的管理区个数 */
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP
 	struct page *node_mem_map;
@@ -547,10 +576,14 @@ typedef struct pglist_data {
 	 */
 	spinlock_t node_size_lock;
 #endif
+	/* 当前结点管理的物理内存起始页面号 */
 	unsigned long node_start_pfn;
+	/* 除开内存空洞之外的物理页面数 */
 	unsigned long node_present_pages; /* total number of physical pages */
+	/* 最大和最小页面号的差值，包含内存空洞的总的物理页面数 */
 	unsigned long node_spanned_pages; /* total size of physical page
 					     range, including holes */
+	/* 当前结点唯一标识id */
 	int node_id;
 	wait_queue_head_t kswapd_wait;
 	struct task_struct *kswapd;
@@ -696,7 +729,12 @@ extern char numa_zonelist_order[];
 
 #ifndef CONFIG_NEED_MULTIPLE_NODES
 
+/*
+ * 对于一致性内存访问UMA，只存在一个内存结点
+ * 使用静态变量contig_page_data表示结点结构
+ */
 extern struct pglist_data contig_page_data;
+/* NODE_DATA宏获取指定id结点时，直接返回contig_page_data */
 #define NODE_DATA(nid)		(&contig_page_data)
 #define NODE_MEM_MAP(nid)	mem_map
 #define MAX_NODES_SHIFT		1
