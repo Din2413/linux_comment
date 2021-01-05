@@ -1887,6 +1887,14 @@ void show_free_areas(void)
  *
  * Add all populated zones of a node to the zonelist.
  */
+/*
+ * 从zonelist的nr_zones位置开始填充pgdat结点中类型不高于zone_type的备用管理区
+ *
+ * 如:
+ *    pgdat结点存在三个管理区，ZONE_DMA、ZONE_DMA32、ZONE_NORMALE
+ *    此时zonelist备用管理区空白，即nr_zones为0，且zone_type为ZONE_DMA32
+ *    则最终确定的备用管理区列表为ZONE_DMA32->ZONE_DMA
+ */
 static int build_zonelists_node(pg_data_t *pgdat, struct zonelist *zonelist,
 				int nr_zones, enum zone_type zone_type)
 {
@@ -1898,6 +1906,7 @@ static int build_zonelists_node(pg_data_t *pgdat, struct zonelist *zonelist,
 	do {
 		zone_type--;
 		zone = pgdat->node_zones + zone_type;
+		/* zone->present_pages大于0，即管理区确实有可用页存在 */
 		if (populated_zone(zone)) {
 			zonelist->zones[nr_zones++] = zone;
 			check_highest_zone(zone_type);
@@ -2083,6 +2092,7 @@ static int find_next_best_node(int node, nodemask_t *used_node_mask)
  * This results in maximum locality--normal zone overflows into local
  * DMA zone, if any--but risks exhausting DMA zone.
  */
+/* 按ZONELIST_ORDER_NODE排列方式，建立pgdat前半部分备选管理区列表 */
 static void build_zonelists_in_node_order(pg_data_t *pgdat, int node)
 {
 	enum zone_type i;
@@ -2122,6 +2132,7 @@ static void build_thisnode_zonelists(pg_data_t *pgdat)
  */
 static int node_order[MAX_NUMNODES];
 
+/* 按ZONELIST_ORDER_ZONE排列方式，建立pgdat前半部分备选管理区列表 */
 static void build_zonelists_in_zone_order(pg_data_t *pgdat, int nr_nodes)
 {
 	enum zone_type i;
@@ -2214,6 +2225,20 @@ static void set_zonelist_order(void)
 		current_zonelist_order = user_zonelist_order;
 }
 
+/*
+ * NUMA系统建立结点备用内存管理区列表zonelist
+ *
+ * 如:
+ *    系统中存在三个内存结点node0/1/2
+ *    每个内存结点包含ZONE_DMA、ZONE_NORMAL三个管理区
+ *    管理区排列方式采用ZONELIST_ORDER_NODE
+ *
+ *    则为node0创建的node_zonelists各管理区的备用管理区列表如下所示
+ *    node_zonelists[ZONE_DMA] = ZONE_DMA(node1)->ZONE_DMA(node2)
+ *    node_zonelists[ZONE_NORMAL] = ZONE_NORMAL(node1)->ZONE_DMA(node1)->ZONE_NORMAL(node2)->ZONE_DMA(node2)
+ *    node_zonelists[ZONE_DMA + MAX_NR_ZONES] = ZONE_DMA(node0)
+ *    node_zonelists[ZONE_NORMAL + MAX_NR_ZONES] = ZONE_NORMAL(node0)->ZONE_DMA(node0)
+ */
 static void build_zonelists(pg_data_t *pgdat)
 {
 	int j, node, load;
@@ -2261,17 +2286,35 @@ static void build_zonelists(pg_data_t *pgdat)
 
 		prev_node = node;
 		load--;
+		/*
+		 * 若采用ZONELIST_ORDER_NODE按结点方式排列
+		 * 则每遍历一个最优备用结点就立即将其所有管理区按又高到低添加到只包含其他结点的备用管理区列表
+		 *
+		 * 不然采用ZONELIST_ORDER_ZONE按管理区方式排列
+		 * 则将遍历的最优备选结点暂存到node_order[MAX_NUMNODES]，待遍历完所有结点后统一处理
+		 */
 		if (order == ZONELIST_ORDER_NODE)
 			build_zonelists_in_node_order(pgdat, node);
 		else
 			node_order[j++] = node;	/* remember order */
 	}
 
+	/*
+	 * 若采用ZONELIST_ORDER_ZONE按管理区方式排列
+	 * 则按照node_order暂存的备选结点顺序建立只包含系统内其他结点的备用管理区列表
+	 *
+	 * 此处备用管理区列表为node_zonelists[MAX_ZONELISTS]的[0~MAX_NUMNODES-1]数组区域
+	 */
 	if (order == ZONELIST_ORDER_ZONE) {
 		/* calculate node order -- i.e., DMA last! */
 		build_zonelists_in_zone_order(pgdat, j);
 	}
 
+	/*
+	 * 建立只包含当前主结点管理区的备用管理区列表
+	 *
+	 * 此处备用列表为node_zonelists[MAX_ZONELISTS]的[MAX_NUMNODES~MAX_ZONELISTS-1]数组区域
+	 */
 	build_thisnode_zonelists(pgdat);
 }
 
@@ -2307,17 +2350,21 @@ static void set_zonelist_order(void)
 	current_zonelist_order = ZONELIST_ORDER_ZONE;
 }
 
+/* UMA系统建立结点备用内存管理区列表zonelist */
 static void build_zonelists(pg_data_t *pgdat)
 {
 	int node, local_node;
 	enum zone_type i,j;
 
 	local_node = pgdat->node_id;
+	/* 遍历结点内存管理区，为各个内存管理区建立备用管理区列表zonelist */
 	for (i = 0; i < MAX_NR_ZONES; i++) {
 		struct zonelist *zonelist;
 
+		/* node_zonelists[MAX_ZONELISTS]中管理区为i的zonelist */
 		zonelist = pgdat->node_zonelists + i;
 
+		/* 对当前结点生成备用管理区列表项 */
  		j = build_zonelists_node(pgdat, zonelist, 0, i);
  		/*
  		 * Now we build the zonelist so that it contains the zones
@@ -2327,11 +2374,13 @@ static void build_zonelists(pg_data_t *pgdat)
  		 * zones coming right after the local ones are those from
  		 * node N+1 (modulo N)
  		 */
+ 		/* 对编号大于当前结点的结点生成备用管理区列表项 */
 		for (node = local_node + 1; node < MAX_NUMNODES; node++) {
 			if (!node_online(node))
 				continue;
 			j = build_zonelists_node(NODE_DATA(node), zonelist, j, i);
 		}
+		/* 对编号小于当前结点的结点生成备用管理区列表项 */
 		for (node = 0; node < local_node; node++) {
 			if (!node_online(node))
 				continue;

@@ -502,7 +502,7 @@ struct zonelist_cache;
  * If zlcache_ptr is not NULL, then it is just the address of zlcache,
  * as explained above.  If zlcache_ptr is NULL, there is no zlcache.
  */
-
+/* 内存结点的备选管理区列表，分配内存时按zones管理区依次遍历，直到满足分配为止 */
 struct zonelist {
 	struct zonelist_cache *zlcache_ptr;		     // NULL or &zlcache
 	struct zone *zones[MAX_ZONES_PER_ZONELIST + 1];      // NULL delimited
@@ -572,16 +572,15 @@ typedef struct pglist_data {
 	/*
 	 * 一致性内存访问UMA中，只存在一个结点，所有zone成员均在node_zones中存放
 	 * 而对于非一致性内存访问UNMA而言，除本地结点，还可能存在多个远端内存结点
-	 * 本地内存结点并不会存放远端内存结点得管理区zone信息，因此引入zonelists概念
-	 * 将远端内存结点和本地内存结点统一挂在zonelist链表上
+	 * 本地内存结点并不会存放远端内存结点得管理区zone信息，但当本段结点分配内存失败时，
+	 * 其实可通过其他多端结点分配，因此引入zonelists概念将远端内存结点和本地内存结点统一挂在zonelist链表上
 	 *
 	 * NUMA中，MAX_ZONELISTS值为2*MAX_NR_ZONES，node_zonelists由两部分组成
-	 * 前半部分指备选结点管理区列表，当自身管理区不满足分配时从备选列表尝试分配
-	 * 后半部分指自身结点管理区列表
+	 * 前半部分[0~MAX_NR_ZONES-1]只包含各个远端结点管理区列表，当自身管理区不满足分配时可从备选列表尝试分配
+	 * 后半部分[MAX_NR_ZONES~MAX_ZONELISTS]只包含自身结点管理区列表
 	 *
 	 * UMA中，MAX_ZONELISTS值则为MAX_NR_ZONES，node_zonelists只包含自身结点管理区
 	 */
-	/* ??????备选结点如何选择?????? */
 	struct zonelist node_zonelists[MAX_ZONELISTS];
 	/* 该结点划分的管理区个数 */
 	int nr_zones;
