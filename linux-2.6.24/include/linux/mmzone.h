@@ -55,8 +55,24 @@ static inline int get_pageblock_migratetype(struct page *page)
 	return get_pageblock_flags_group(page, PB_migrate, PB_migrate_end);
 }
 
+/*
+ * 伙伴系统特定order的空闲页框块链表
+ * 链表内空闲页框块大小相同，且为2的倍数
+ *
+ * Linux 内核2.6.24之前，free_area只采用一个链表管理空闲页框块
+ * 但由于，伙伴系统仅仅寄托于内存释放时的合并操作而不考虑分配时的策略，
+ * 即伙伴系统的碎片防止机制寄托于内存使用者会及时释放掉内存的情况，
+ * 当系统长期运行，或使用者长期不释放内存时，物理内存依然会产生很多碎片。
+ *
+ * 为解决上述问题，Linux内核引入反碎片(anti-gragmentation)技术——内存分类
+ * 将相同order的空闲页框块按可移动属性分成不同的类别(MIGRATE_TYPES)，每个类别对应一个链表单独维护
+ * 当出现碎片时，可移动页面将会迁移，为申请者腾出所需的连续页面空间
+ * 由此避免空闲页面空间过于零碎而无法申请大块连续内存的情况
+ */
 struct free_area {
+	/* 不同类别的子空闲内存块链表 */
 	struct list_head	free_list[MIGRATE_TYPES];
+	/* 空闲页框块总个数 */
 	unsigned long		nr_free;
 };
 
@@ -226,6 +242,7 @@ enum zone_type {
 #endif
 #undef __ZONE_COUNT
 
+/* 内存管理区描述符 */
 struct zone {
 	/* Fields commonly accessed by the page allocator */
 	unsigned long		pages_min, pages_low, pages_high;
@@ -240,6 +257,7 @@ struct zone {
 	unsigned long		lowmem_reserve[MAX_NR_ZONES];
 
 #ifdef CONFIG_NUMA
+	/* NUMA系统中，管理区所属的节点id */
 	int node;
 	/*
 	 * zone reclaim becomes active if more unmapped pages exist.
@@ -258,6 +276,22 @@ struct zone {
 	/* see spanned/present_pages for more description */
 	seqlock_t		span_seqlock;
 #endif
+	/*
+	 * 伙伴系统-管理内存分区空闲内存
+	 * 伙伴系统把所有空闲页框分组为MAX_ORDER(默认值为11)个块链表
+	 * 每个链表分别包含大小为2^0、2^1、2^2、2^3、2^4、...、2^(MAX_ORDER)个连续的页框
+	 *
+	 * 分配策略：
+	 * 请求内存时，使用最小连续内存页框块满足内存分配
+	 * 当所请求的最小连续内存块链表无空闲块满足分配时，则依次向上遍历
+	 * 直到能满足分配为止，并将满足分配请求后剩余的块按order划分插入到对应空闲链表内
+	 *
+	 * 释放策略：
+	 * 释放内存时，插入到对应order的空闲链表时，尝试将一对空闲伙伴块合并为一个两倍大小的单独块
+	 * 并将合并后的单独块插入到高一级的空闲链表内，继续执行上述合并动作，直到无法合并为止
+	 *
+	 * ????????为什么要引入伙伴系统机制管理空闲内存????????
+	 */
 	struct free_area	free_area[MAX_ORDER];
 
 #ifndef CONFIG_SPARSEMEM

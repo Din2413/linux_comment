@@ -2913,6 +2913,7 @@ __meminit int init_currently_empty_zone(struct zone *zone,
 
 	memmap_init(size, pgdat->node_id, zone_idx(zone), zone_start_pfn);
 
+	/* 初始化内存管理区伙伴系统空闲页帧块链表为空 */
 	zone_init_free_lists(pgdat, zone, zone->spanned_pages);
 
 	return 0;

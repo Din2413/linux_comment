@@ -192,6 +192,10 @@ static inline struct page *alloc_pages_node(int nid, gfp_t gfp_mask,
 #ifdef CONFIG_NUMA
 extern struct page *alloc_pages_current(gfp_t gfp_mask, unsigned order);
 
+/*
+ * 分配2^order个连续的页框
+ * 返回所分配第一个页框描述符的地址，如果失败，则返回NULL
+ */
 static inline struct page *
 alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
@@ -203,10 +207,18 @@ alloc_pages(gfp_t gfp_mask, unsigned int order)
 extern struct page *alloc_page_vma(gfp_t gfp_mask,
 			struct vm_area_struct *vma, unsigned long addr);
 #else
+/*
+ * 分配2^order个连续的页框
+ * 返回所分配第一个页框描述符的地址，如果失败，则返回NULL
+ */
 #define alloc_pages(gfp_mask, order) \
 		alloc_pages_node(numa_node_id(), gfp_mask, order)
 #define alloc_page_vma(gfp_mask, vma, addr) alloc_pages(gfp_mask, 0)
 #endif
+/*
+ * 请求一个单独页框
+ * 返回所分配页框描述符的地址，如果失败，则返回NULL
+ */
 #define alloc_page(gfp_mask) alloc_pages(gfp_mask, 0)
 
 extern unsigned long FASTCALL(__get_free_pages(gfp_t gfp_mask, unsigned int order));
