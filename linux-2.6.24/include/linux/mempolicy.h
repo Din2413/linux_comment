@@ -9,6 +9,13 @@
  */
 
 /* Policies */
+/*
+ * NUMA内存分配策略
+ * MPOL_DEFAULT:默认内存分配策略
+ * MPOL_BIND：指定在一些特定结点上进行内存分配
+ * MPOL_PREFERRED：指定首先在prefered结点上进行内存分配，如果失败则搜索其他内存结点
+ * MPOL_INTERLEAVE：指定在策略中指定的节点之间按页面粒度交错分配页面
+ */
 #define MPOL_DEFAULT	0
 #define MPOL_PREFERRED	1
 #define MPOL_BIND	2

@@ -191,6 +191,16 @@ extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern long vm_total_pages;
 
 #ifdef CONFIG_NUMA
+/*
+ * 用于管理zone内部空闲内存不满足分配请求时，是直接从下一个备选zone请求分配还是先在内部回收内存
+ *
+ * 当zone_reclaim_mode为0时，表示关闭zone_reclaim模式，直接从下一个zone请求分配
+ * 当zone_reclaim_mode为1时，表示打开zone_reclaim模式，先在本zone回收内存再判断是否满足分配请求，若依旧不满足则向下一个zone请求
+ * 当zone_reclaim_mode为2时，表示可通过将cache中的脏数据写会硬盘进行内存回收
+ * 当zone_reclaim_mode为4时，表示可通过swap方式回收内存
+ *
+ * zone_reclaim_mode可通过/proc/sys/vm/zone_reclaim_mode进行修改
+ */
 extern int zone_reclaim_mode;
 extern int sysctl_min_unmapped_ratio;
 extern int sysctl_min_slab_ratio;

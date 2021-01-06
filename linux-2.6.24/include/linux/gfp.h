@@ -38,6 +38,7 @@ struct vm_area_struct;
 #define __GFP_HIGH	((__force gfp_t)0x20u)	/* Should access emergency pools? */
 #define __GFP_IO	((__force gfp_t)0x40u)	/* Can start physical IO? */
 #define __GFP_FS	((__force gfp_t)0x80u)	/* Can call down to low-level FS? */
+/* 所请求的页可能为"冷"的，即不在CPU硬件高速缓存中 */
 #define __GFP_COLD	((__force gfp_t)0x100u)	/* Cache-cold page required */
 #define __GFP_NOWARN	((__force gfp_t)0x200u)	/* Suppress page allocation failure warning */
 #define __GFP_REPEAT	((__force gfp_t)0x400u)	/* Retry the allocation.  Might fail */
@@ -109,6 +110,7 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 {
 	WARN_ON((gfp_flags & GFP_MOVABLE_MASK) == GFP_MOVABLE_MASK);
 
+	/* 内存可移动功能未开启时，空闲内存块的可移动类型均为MIGRATE_UNMOVABLE不可移动 */
 	if (unlikely(page_group_by_mobility_disabled))
 		return MIGRATE_UNMOVABLE;
 
@@ -117,6 +119,10 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 		((gfp_flags & __GFP_RECLAIMABLE) != 0);
 }
 
+/*
+ * 根据内存分配掩码确定备选管理区列表
+ * __GFP_THISNODE:表示只在当前结点的管理区内分配内存，对于备选列表[MAX_NR_ZONES~MAX_ZONELISTS-1]
+ */
 static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	int base = 0;
@@ -202,6 +208,11 @@ alloc_pages(gfp_t gfp_mask, unsigned int order)
 	if (unlikely(order >= MAX_ORDER))
 		return NULL;
 
+	/*
+	 * 根据当前进程的内存分配策略选择符合要求的结点
+	 * 并根据内存分配掩码选择该结点的备选管理区列表
+	 * 最后从备选管理区列表分配阶为order的空闲内存块
+	 */
 	return alloc_pages_current(gfp_mask, order);
 }
 extern struct page *alloc_page_vma(gfp_t gfp_mask,

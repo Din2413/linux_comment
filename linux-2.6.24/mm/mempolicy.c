@@ -1147,6 +1147,10 @@ static struct mempolicy * get_vma_policy(struct task_struct *task,
 }
 
 /* Return a zonelist representing a mempolicy */
+/*
+ * 依据内存分配策略policy确定内存分配结点
+ * 再根据内存分配掩码gfp选定用于分配内存的备选管理区列表zonelist
+ */
 static struct zonelist *zonelist_policy(gfp_t gfp, struct mempolicy *policy)
 {
 	int nd;
@@ -1172,6 +1176,7 @@ static struct zonelist *zonelist_policy(gfp_t gfp, struct mempolicy *policy)
 		nd = 0;
 		BUG();
 	}
+	/* 根据内存分配掩码选定备选管理区列表 */
 	return NODE_DATA(nd)->node_zonelists + gfp_zone(gfp);
 }
 
@@ -1384,6 +1389,11 @@ alloc_page_vma(gfp_t gfp, struct vm_area_struct *vma, unsigned long addr)
  *	Don't call cpuset_update_task_memory_state() unless
  *	1) it's ok to take cpuset_sem (can WAIT), and
  *	2) allocating for current task (not interrupt).
+ */
+/*
+ * 根据当前进程的内存分配策略选择符合要求的结点
+ * 并根据内存分配掩码选择该结点的备选管理区列表
+ * 最后从备选管理区列表分配阶为order的空闲内存块
  */
 struct page *alloc_pages_current(gfp_t gfp, unsigned order)
 {

@@ -1048,22 +1048,34 @@ void split_page(struct page *page, unsigned int order)
  * we cheat by calling it from here, in the order > 0 path.  Saves a branch
  * or two.
  */
+/* 管理区zone水位线检查通过，根据内存分配掩码从zone中分配阶为order的空闲内存块 */
 static struct page *buffered_rmqueue(struct zonelist *zonelist,
 			struct zone *zone, int order, gfp_t gfp_flags)
 {
 	unsigned long flags;
 	struct page *page;
+	/* cold表示所请求的页是否在CPU硬件高速缓存中，为1表示不在，否则在 */
 	int cold = !!(gfp_flags & __GFP_COLD);
 	int cpu;
+	/* 内存分配掩码转换成目标空闲内存块的可移动类型 */
 	int migratetype = allocflags_to_migratetype(gfp_flags);
 
 again:
+	/* cpu id */
 	cpu  = get_cpu();
+	/*
+	 * 当请求的空闲内存块阶为0，即分配单页框时，可直接在'每CPU'页框高速缓存中分配
+	 *
+	 * 为提升系统整体性能，每个管理区都定义一个'每CPU'高速缓存
+	 * '每CPU'高速缓存包含一些预分配的页框，避免单个页框分配也由伙伴系统处理
+	 */
 	if (likely(order == 0)) {
 		struct per_cpu_pages *pcp;
 
+		/* 依据__GFP_COLD标志选择'每CPU'高速缓存的冷页还是热页 */
 		pcp = &zone_pcp(zone, cpu)->pcp[cold];
 		local_irq_save(flags);
+		/* 当缓存中的页框数为0时，需要从伙伴系统中分配batch个单一页框补充到高速缓存内 */
 		if (!pcp->count) {
 			pcp->count = rmqueue_bulk(zone, 0,
 					pcp->batch, &pcp->list, migratetype);
@@ -1109,6 +1121,14 @@ failed:
 	return NULL;
 }
 
+/*
+ * 空闲内存块分配标志
+ * ALLOC_NO_WATERMARKS:表示分配内存块时不考虑管理区水位值
+ * ALLOC_WMARK_MIN:表示分配内存块时仅在最小水位及以上分配
+ * ALLOC_WMARK_LOW:表示分配内存块时仅在低水位及以上分配
+ * ALLOC_WMARK_HIGH:表示分配内存块时仅在高水位及以上分配
+ * ALLOC_HARDER:表示努力满足内存分配，一般设置__GFP_ATOMIC时会使用
+ */
 #define ALLOC_NO_WATERMARKS	0x01 /* don't check watermarks at all */
 #define ALLOC_WMARK_MIN		0x02 /* use pages_min watermark */
 #define ALLOC_WMARK_LOW		0x04 /* use pages_low watermark */
@@ -1216,21 +1236,32 @@ static inline int should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
  * Return 1 if free pages are above 'mark'. This takes into account the order
  * of the allocation.
  */
+/* 内存块分配前判断水位是否ok，返回1表示满足水位要求，否则不满足 */
 int zone_watermark_ok(struct zone *z, int order, unsigned long mark,
 		      int classzone_idx, int alloc_flags)
 {
 	/* free_pages my go negative - that's OK */
 	long min = mark;
+	/* 减去需要分配内存块大小后当前管理区空闲内存页帧数 */
 	long free_pages = zone_page_state(z, NR_FREE_PAGES) - (1 << order) + 1;
 	int o;
 
+	/* 如果需求比较迫切，则放宽限值 */
 	if (alloc_flags & ALLOC_HIGH)
 		min -= min / 2;
+	/* 如果需求更加迫切，则进一步放宽限值 */
 	if (alloc_flags & ALLOC_HARDER)
 		min -= min / 4;
 
+	/* 空闲页帧数不大于保留内存与最低限值之后，则此次分配请求不满足水位要求 */
 	if (free_pages <= min + z->lowmem_reserve[classzone_idx])
 		return 0;
+	/*
+	 * 虽然空闲页帧数free_pages满足水位数量要求
+	 * 但可以所有空闲页帧都在阶小于order的空闲链表上
+	 *
+	 * 采用如下方法用于判断未分配前的空闲内存中是否存在阶大于order的空闲内存块
+	 */
 	for (o = 0; o < order; o++) {
 		/* At the next order, this order's pages become unavailable */
 		free_pages -= z->free_area[o].nr_free << o;
@@ -1368,6 +1399,7 @@ static void zlc_mark_zone_full(struct zonelist *zonelist, struct zone **z)
  * get_page_from_freelist goes through the zonelist trying to allocate
  * a page.
  */
+/* 按序遍历zonelist备选管理区列表的管理区，尝试分配阶为order的空闲内存块 */
 static struct page *
 get_page_from_freelist(gfp_t gfp_mask, unsigned int order,
 		struct zonelist *zonelist, int alloc_flags)
@@ -1394,6 +1426,7 @@ zonelist_scan:
 		 * zones that may not be allowed by the current gfp_mask.
 		 * Check the zone is allowed by the current flags
 		 */
+		/* 跳过管理区类型高于内存分配掩码指定类型的管理区 */
 		if (unlikely(alloc_should_filter_zonelist(zonelist))) {
 			if (highest_zoneidx == -1)
 				highest_zoneidx = gfp_zone(gfp_mask);
@@ -1409,22 +1442,36 @@ zonelist_scan:
 			!cpuset_zone_allowed_softwall(zone, gfp_mask))
 				goto try_next_zone;
 
+		/* 未设置ALLOC_NO_WATERMARKS标志，即内存块分配需考虑管理区水位 */
 		if (!(alloc_flags & ALLOC_NO_WATERMARKS)) {
 			unsigned long mark;
+			/*
+			 * 根据水位分配标签设置空闲内存下限值
+			 * 即分配完阶为order的内存块后，空闲内存页帧数是否仍大于该下限值
+			 */
 			if (alloc_flags & ALLOC_WMARK_MIN)
 				mark = zone->pages_min;
 			else if (alloc_flags & ALLOC_WMARK_LOW)
 				mark = zone->pages_low;
 			else
 				mark = zone->pages_high;
+			/* 内存管理区zone水位检查 */
 			if (!zone_watermark_ok(zone, order, mark,
 				    classzone_idx, alloc_flags)) {
+				/*
+				 * 管理区zone内无法满足阶为order的内存块分配
+				 * 根据zone_reclaim_mode决策从下一个zone分配空闲内存还是在当前zone内部回收
+				 *
+				 * 当zone_reclaim_mode为0时，表示不对当前zone回收内存，直接从下一个zone分配空闲内存
+				 * 当zone_reclaim_mode非0时，表示先对当前zone回收内存，当回收内存后依旧不满足分配时再从下一个zone分配内存
+				 */
 				if (!zone_reclaim_mode ||
 				    !zone_reclaim(zone, gfp_mask, order))
 					goto this_zone_full;
 			}
 		}
 
+		/* 管理区zone水位线检查通过，内存分配请求可满足时，从zone中分配空闲内存块 */
 		page = buffered_rmqueue(zonelist, zone, order, gfp_mask);
 		if (page)
 			break;
@@ -1451,6 +1498,7 @@ try_next_zone:
 /*
  * This is the 'heart' of the zoned buddy allocator.
  */
+/* 根据内存分配掩码gfp_mask从备选管理区列表zonelist中分配阶为order的空闲内存块 */
 struct page * fastcall
 __alloc_pages(gfp_t gfp_mask, unsigned int order,
 		struct zonelist *zonelist)
@@ -1470,6 +1518,7 @@ __alloc_pages(gfp_t gfp_mask, unsigned int order,
 		return NULL;
 
 restart:
+	/* 备选管理区列表内的管理区数组，以NULL结尾 */
 	z = zonelist->zones;  /* the list of zones suitable for gfp_mask */
 
 	if (unlikely(*z == NULL)) {
@@ -1480,6 +1529,10 @@ restart:
 		return NULL;
 	}
 
+	/*
+	 * 先在zonelist备选管理区列表的ALLOC_WARK_LOW低水位之上分配阶为order的空闲内存块
+	 * 成功则返回空闲内存块首个页帧的描述符地址，否则返回NULL
+	 */
 	page = get_page_from_freelist(gfp_mask|__GFP_HARDWALL, order,
 				zonelist, ALLOC_WMARK_LOW|ALLOC_CPUSET);
 	if (page)
@@ -2234,8 +2287,8 @@ static void set_zonelist_order(void)
  *    管理区排列方式采用ZONELIST_ORDER_NODE
  *
  *    则为node0创建的node_zonelists各管理区的备用管理区列表如下所示
- *    node_zonelists[ZONE_DMA] = ZONE_DMA(node1)->ZONE_DMA(node2)
- *    node_zonelists[ZONE_NORMAL] = ZONE_NORMAL(node1)->ZONE_DMA(node1)->ZONE_NORMAL(node2)->ZONE_DMA(node2)
+ *    node_zonelists[ZONE_DMA] = ZONE_DMA(node0)->ZONE_DMA(node1)->ZONE_DMA(node2)
+ *    node_zonelists[ZONE_NORMAL] = ZONE_NORMAL(node0)->ZONE_DMA(node0)->ZONE_NORMAL(node1)->ZONE_DMA(node1)->ZONE_NORMAL(node2)->ZONE_DMA(node2)
  *    node_zonelists[ZONE_DMA + MAX_NR_ZONES] = ZONE_DMA(node0)
  *    node_zonelists[ZONE_NORMAL + MAX_NR_ZONES] = ZONE_NORMAL(node0)->ZONE_DMA(node0)
  */
@@ -2288,7 +2341,7 @@ static void build_zonelists(pg_data_t *pgdat)
 		load--;
 		/*
 		 * 若采用ZONELIST_ORDER_NODE按结点方式排列
-		 * 则每遍历一个最优备用结点就立即将其所有管理区按又高到低添加到只包含其他结点的备用管理区列表
+		 * 则每遍历一个最优备用结点就立即将其所有管理区按又高到低添加到除当前结点外也包含其他结点的备用管理区列表
 		 *
 		 * 不然采用ZONELIST_ORDER_ZONE按管理区方式排列
 		 * 则将遍历的最优备选结点暂存到node_order[MAX_NUMNODES]，待遍历完所有结点后统一处理
@@ -2301,7 +2354,7 @@ static void build_zonelists(pg_data_t *pgdat)
 
 	/*
 	 * 若采用ZONELIST_ORDER_ZONE按管理区方式排列
-	 * 则按照node_order暂存的备选结点顺序建立只包含系统内其他结点的备用管理区列表
+	 * 则按照node_order暂存的备选结点顺序建立除当前结点外也包含系统内其他结点的备用管理区列表
 	 *
 	 * 此处备用管理区列表为node_zonelists[MAX_ZONELISTS]的[0~MAX_NUMNODES-1]数组区域
 	 */

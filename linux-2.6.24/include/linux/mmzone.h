@@ -129,6 +129,11 @@ struct per_cpu_pages {
 };
 
 struct per_cpu_pageset {
+	/*
+	 * 每个CPU为每个内存管理区提供两个高速缓存
+	 * 一个热高速缓存，表明其存放页框所包含的内容很可能在CPU硬件高速缓存中
+	 * 一个冷高速缓存，表明其存放页框所包含的内容不在CPU硬件高速缓存中
+	 */
 	struct per_cpu_pages pcp[2];	/* 0: hot.  1: cold */
 #ifdef CONFIG_NUMA
 	s8 expire;
