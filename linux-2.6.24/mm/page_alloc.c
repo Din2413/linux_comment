@@ -644,6 +644,7 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
  * Go through the free lists for the given migratetype and remove
  * the smallest available page from the freelists
  */
+/* 遍历阶大于order、且可移动类型为migratetupe的空闲块链表，并从中分配阶为order的内存块 */
 static struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 						int migratetype)
 {
@@ -654,15 +655,23 @@ static struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	/* Find a page of the appropriate size in the preferred list */
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
 		area = &(zone->free_area[current_order]);
+		/* migratetype类型的空闲链表为空，则跳过 */
 		if (list_empty(&area->free_list[migratetype]))
 			continue;
 
+		/* 从migratetype类型的空闲链表头部分配一个内存块 */
 		page = list_entry(area->free_list[migratetype].next,
 							struct page, lru);
 		list_del(&page->lru);
+		/*
+		 * 清除内存块首个页框描述符的伙伴系统标志PG_buddy以及对应内存块阶order
+		 * PG_buddy标志标识该页框描述符所属的内存块在伙伴系统内，内存块阶值存储在page->private中
+		 */
 		rmv_page_order(page);
+		/* 递减该空闲内存块链表的空闲内存块数量 */
 		area->nr_free--;
 		__mod_zone_page_state(zone, NR_FREE_PAGES, - (1UL << order));
+		/* 当分配的内存块阶大于目标阶order时，需将大于2^order的剩余内存分成合适的块分散到合适的空闲链表内 */
 		expand(zone, page, order, current_order, area, migratetype);
 		return page;
 	}
@@ -675,6 +684,7 @@ static struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
  * This array describes the order lists are fallen back to when
  * the free lists for the desirable migrate type are depleted
  */
+/* 当目标migratetype类型用尽时，内存块将按照这个备选列表分配 */
 static int fallbacks[MIGRATE_TYPES][MIGRATE_TYPES-1] = {
 	[MIGRATE_UNMOVABLE]   = { MIGRATE_RECLAIMABLE, MIGRATE_MOVABLE,   MIGRATE_RESERVE },
 	[MIGRATE_RECLAIMABLE] = { MIGRATE_UNMOVABLE,   MIGRATE_MOVABLE,   MIGRATE_RESERVE },
@@ -758,6 +768,7 @@ static struct page *__rmqueue_fallback(struct zone *zone, int order,
 	int migratetype, i;
 
 	/* Find the largest possible block of pages in the other list */
+	/* 当从备选类型中请求空闲块时，应尽可能选择阶更大的空闲内存块，避免下次该migratetype类型的分配请求依旧需要从备选列表中分配 */
 	for (current_order = MAX_ORDER-1; current_order >= order;
 						--current_order) {
 		for (i = 0; i < MIGRATE_TYPES - 1; i++) {
@@ -818,13 +829,21 @@ static struct page *__rmqueue_fallback(struct zone *zone, int order,
  * Do the hard work of removing an element from the buddy allocator.
  * Call me with the zone->lock already held.
  */
+/*
+ * 从管理区zone分配阶为order、可移动类型为migratetype的空闲内存块
+ * 当zone中所有阶大于order的空闲链表中都没有目标migratetype类型的内存块时，需从目标migratetype的备选类型中请求
+ *
+ * 当从备选类型中请求空闲块时，应尽可能选择阶更大的空闲内存块，避免下次该migratetype类型的分配请求依旧需要从备选列表中分配
+ */
 static struct page *__rmqueue(struct zone *zone, unsigned int order,
 						int migratetype)
 {
 	struct page *page;
 
+	/* 从目标migratetype类型的空闲块列表中分配，无法满足时返回NULL */
 	page = __rmqueue_smallest(zone, order, migratetype);
 
+	/* 当zone中所有阶大于order的空闲链表中都没有目标migratetype类型的内存块时，需从目标migratetype的备选类型中请求 */
 	if (unlikely(!page))
 		page = __rmqueue_fallback(zone, order, migratetype);
 
@@ -1061,7 +1080,7 @@ static struct page *buffered_rmqueue(struct zonelist *zonelist,
 	int migratetype = allocflags_to_migratetype(gfp_flags);
 
 again:
-	/* cpu id */
+	/* 禁止抢占，并返回当前cpu id，需配合put_cpu使用 */
 	cpu  = get_cpu();
 	/*
 	 * 当请求的空闲内存块阶为0，即分配单页框时，可直接在'每CPU'页框高速缓存中分配
@@ -1075,7 +1094,7 @@ again:
 		/* 依据__GFP_COLD标志选择'每CPU'高速缓存的冷页还是热页 */
 		pcp = &zone_pcp(zone, cpu)->pcp[cold];
 		local_irq_save(flags);
-		/* 当缓存中的页框数为0时，需要从伙伴系统中分配batch个单一页框补充到高速缓存内 */
+		/* 当缓存中的页框数为0时，需要从伙伴系统中分配可移动类型为migratetype的batch个单一页框补充到高速缓存内 */
 		if (!pcp->count) {
 			pcp->count = rmqueue_bulk(zone, 0,
 					pcp->batch, &pcp->list, migratetype);
@@ -1084,20 +1103,28 @@ again:
 		}
 
 		/* Find a page of the appropriate migrate type */
+		/* 遍历'每CPU'高速缓存，选择目标可移动类型相同的页帧 */
 		list_for_each_entry(page, &pcp->list, lru)
 			if (page_private(page) == migratetype)
 				break;
 
 		/* Allocate more to the pcp list if necessary */
+		/*
+		 * 当'每CPU'高速缓存中没有与目标可移动类型相同的页帧时
+		 * 需要从伙伴系统中分配可移动类型为migratetype的batch个单一页框补充到高速缓存内
+		 */
 		if (unlikely(&page->lru == &pcp->list)) {
 			pcp->count += rmqueue_bulk(zone, 0,
 					pcp->batch, &pcp->list, migratetype);
+			/* 直接从补充到高速缓存中的链表首部分配页帧 */
 			page = list_entry(pcp->list.next, struct page, lru);
 		}
 
+		/* 将页帧从高速缓存移除，并递减高速缓存页帧数 */
 		list_del(&page->lru);
 		pcp->count--;
 	} else {
+		/* 当请求的空闲内存块阶不为0时，则从伙伴系统中分配 */
 		spin_lock_irqsave(&zone->lock, flags);
 		page = __rmqueue(zone, order, migratetype);
 		spin_unlock(&zone->lock);
@@ -1473,6 +1500,7 @@ zonelist_scan:
 
 		/* 管理区zone水位线检查通过，内存分配请求可满足时，从zone中分配空闲内存块 */
 		page = buffered_rmqueue(zonelist, zone, order, gfp_mask);
+		/* 空闲内存块分配成功，则直接跳出备选管理区列表遍历 */
 		if (page)
 			break;
 this_zone_full:

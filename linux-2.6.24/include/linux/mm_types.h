@@ -33,6 +33,7 @@ typedef unsigned long mm_counter_t;
  * a page, though if it is a pagecache page, rmap structures can tell us
  * who is mapping it.
  */
+/* 物理页框描述符 */
 struct page {
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */

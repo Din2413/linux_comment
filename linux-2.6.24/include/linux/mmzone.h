@@ -122,9 +122,13 @@ enum zone_stat_item {
 	NR_VM_ZONE_STAT_ITEMS };
 
 struct per_cpu_pages {
+	/* '每CPU'高速缓存中已缓存的页框数 */
 	int count;		/* number of pages in the list */
+	/* 缓存页框数上界，当数量高于此值时，则向伙伴系统释放batch个页框 */
 	int high;		/* high watermark, emptying needed */
+	/* 当需要增加或者减少高速缓存页框时，向伙伴系统申请或释放的页框个数 */
 	int batch;		/* chunk size for buddy add/remove */
+	/* '每CPU'高速缓存中已缓存的页框描述符链表 */
 	struct list_head list;	/* the list of pages */
 };
 
