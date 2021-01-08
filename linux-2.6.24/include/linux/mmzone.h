@@ -650,7 +650,9 @@ typedef struct pglist_data {
 					     range, including holes */
 	/* 当前结点唯一标识id */
 	int node_id;
+	/* kswapd内存回收线程等待队列 */
 	wait_queue_head_t kswapd_wait;
+	/* kswapd内存回收线程的进程描述符指针 */
 	struct task_struct *kswapd;
 	int kswapd_max_order;
 } pg_data_t;

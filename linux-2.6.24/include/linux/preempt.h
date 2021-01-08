@@ -21,6 +21,7 @@
 #define inc_preempt_count() add_preempt_count(1)
 #define dec_preempt_count() sub_preempt_count(1)
 
+/* preempt_count决定是否允许抢占，值为0时表示当前进程/CPU允许抢占，否则不允许抢占 */
 #define preempt_count()	(current_thread_info()->preempt_count)
 
 #ifdef CONFIG_PREEMPT

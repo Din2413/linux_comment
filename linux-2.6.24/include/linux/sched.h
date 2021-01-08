@@ -1837,7 +1837,11 @@ static inline int signal_pending(struct task_struct *p)
 {
 	return unlikely(test_tsk_thread_flag(p,TIF_SIGPENDING));
 }
-  
+
+/*
+ * 检查current进程描述符的thread_info是否包含TIF_NEED_RESCHED标志
+ * 当TIF_NEED_RESCHED被置位时，表示进程已触发抢占，current进程需重新调度
+ */
 static inline int need_resched(void)
 {
 	return unlikely(test_thread_flag(TIF_NEED_RESCHED));

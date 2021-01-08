@@ -4677,14 +4677,22 @@ static void __cond_resched(void)
 	 * cond_resched() call.
 	 */
 	do {
+		/* 执行调度前，将进程描述符thread_info的PREEMPT_ACTIVE置位，表明进程已被内核抢占 */
 		add_preempt_count(PREEMPT_ACTIVE);
+		/* 执行进程调度 */
 		schedule();
+		/* 被调度进程重新获得CPU执行权，去除PREEMPT_ACTIVE置位状态 */
 		sub_preempt_count(PREEMPT_ACTIVE);
-	} while (need_resched());
+	} while (need_resched()); /* 如有必要，循环调度 */
 }
 
 int __sched cond_resched(void)
 {
+	/*
+	 * 1、need_resched检查current进程描述符thread_info的TIF_NEED_RESCHED是否被置位，若置位则允许重新调度
+	 * 2、preempt_count检查current进程描述符thread_info的PREEMPT_ACTIVE是否被置位，若未置位才允许重新调度
+	 * 若满足上述条件，且系统处于SYSTEM_RUNNING状态，则执行进程重新调度
+	 */
 	if (need_resched() && !(preempt_count() & PREEMPT_ACTIVE) &&
 					system_state == SYSTEM_RUNNING) {
 		__cond_resched();

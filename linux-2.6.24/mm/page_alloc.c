@@ -1531,6 +1531,7 @@ struct page * fastcall
 __alloc_pages(gfp_t gfp_mask, unsigned int order,
 		struct zonelist *zonelist)
 {
+	/* __GFP_WAIT标志置位则表示允许内核对请求内存块的当前进程阻塞 */
 	const gfp_t wait = gfp_mask & __GFP_WAIT;
 	struct zone **z;
 	struct page *page;
@@ -1577,6 +1578,7 @@ restart:
 	if (NUMA_BUILD && (gfp_mask & GFP_THISNODE) == GFP_THISNODE)
 		goto nopage;
 
+	/* 当备选管理区列表以ALLOC_WMARK_LOW请求内存满足不了时，则唤醒各结点的kswapd异步回收页框 */
 	for (z = zonelist->zones; *z; z++)
 		wakeup_kswapd(*z, order);
 
@@ -1590,6 +1592,7 @@ restart:
 	 * policy or is asking for __GFP_HIGH memory.  GFP_ATOMIC requests will
 	 * set both ALLOC_HARDER (!wait) and ALLOC_HIGH (__GFP_HIGH).
 	 */
+	/* 执行第二次内存管理区扫描，将低请求检查水位线，以ALLOC_WMARK_MIN请求内存 */
 	alloc_flags = ALLOC_WMARK_MIN;
 	if ((unlikely(rt_task(p)) && !in_interrupt()) || !wait)
 		alloc_flags |= ALLOC_HARDER;
@@ -1613,6 +1616,12 @@ restart:
 	/* This allocation should allow future memory freeing. */
 
 rebalance:
+	/*
+	 * 如果内存分配的内核控制路径不是终端处理程序或可延迟函数，
+	 * 并且试图回收页框(PF_MEMALLOC，TIF_MEMDIE标志被置位)，
+	 * 并且允许使用保留内存(__GFP_NOMEMALLOC标志被置位)，
+	 * 则进一步降低要求，ALLOC_NO_WATERMARKS忽略水位线检查，对内存管理区执行第三次扫描
+	 */
 	if (((p->flags & PF_MEMALLOC) || unlikely(test_thread_flag(TIF_MEMDIE)))
 			&& !in_interrupt()) {
 		if (!(gfp_mask & __GFP_NOMEMALLOC)) {
@@ -1631,9 +1640,11 @@ nofail_alloc:
 	}
 
 	/* Atomic allocations - we can't balance anything */
+	/* 不允许阻塞当前请求内存块的进程，则直接返回 */
 	if (!wait)
 		goto nopage;
 
+	/* 如果请求内存块的进程允许被阻塞，则主动检查是否可执行进程调度 */
 	cond_resched();
 
 	/* We now go into synchronous reclaim */
@@ -3496,6 +3507,7 @@ static void __meminit free_area_init_core(struct pglist_data *pgdat,
 
 	pgdat_resize_init(pgdat);
 	pgdat->nr_zones = 0;
+	/* 初始化结点的kswapd内存回收线程等待队列 */
 	init_waitqueue_head(&pgdat->kswapd_wait);
 	pgdat->kswapd_max_order = 0;
 	
