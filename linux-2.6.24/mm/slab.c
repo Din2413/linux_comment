@@ -423,6 +423,19 @@ struct kmem_cache {
 	/* force GFP flags, e.g. GFP_DMA */
 	gfp_t gfpflags;
 
+	/*
+	 * slab着色
+	 *
+	 * 引入原因：
+	 * CPU硬件高速缓存访问速度远快于内存访问速度，但硬件高速缓存远小于内存，通常采用多路组相连或直接与内存映射
+	 * (硬件高速缓存参考文档：https://www.mdeditor.tw/pl/gf4w)
+	 * 当两个slab的对象A、B分别位于两个内存组内相同偏移的位置时，对象A、B对应相同位置的硬件缓存，当来回频繁访问A、B对象时，会引起大量的cache miss，导致性能急剧下降
+	 *
+	 * 解决方案：
+	 * slab着色便是为了解决高频率cache miss问题而引入的，主要思想就是对slab对象做相应偏移从而避免两个对象映射到硬件高速缓存相同位置
+	 *
+	 * colour:slab着色颜色种类，即对象偏移种类
+	 */
 	size_t colour;			/* cache colouring range */
 	unsigned int colour_off;	/* colour offset */
 	struct kmem_cache *slabp_cache;
@@ -1712,6 +1725,7 @@ static void *kmem_getpages(struct kmem_cache *cachep, gfp_t flags, int nodeid)
 	else
 		add_zone_page_state(page_zone(page),
 			NR_SLAB_UNRECLAIMABLE, nr_pages);
+	/* 设置page->flag的PG_slab标志，表示该页帧被slab缓存占用 */
 	for (i = 0; i < nr_pages; i++)
 		__SetPageSlab(page + i);
 	return page_address(page);
@@ -2668,18 +2682,24 @@ static struct slab *alloc_slabmgmt(struct kmem_cache *cachep, void *objp,
 {
 	struct slab *slabp;
 
+	/* slab管理区位于slab外，则在指定slabp_cache中分配slab描述符对象 */
 	if (OFF_SLAB(cachep)) {
 		/* Slab management obj is off-slab. */
 		slabp = kmem_cache_alloc_node(cachep->slabp_cache,
 					      local_flags & ~GFP_THISNODE, nodeid);
 		if (!slabp)
 			return NULL;
+	/* slab管理区位于slab中 */
 	} else {
+		/* objp为slab首页面的虚拟地址，加上着色偏移得到slab描述符对象的虚拟地址 */
 		slabp = objp + colour_off;
+		/* slab_size为slab描述符对象的大小，colour_off更新为增加slab_size的大小 */
 		colour_off += cachep->slab_size;
 	}
 	slabp->inuse = 0;
+	/* 刷新slab首对象偏移，slab管理区位于slab内/外分别对应不一样的首对象偏移 */
 	slabp->colouroff = colour_off;
+	/* 确定slab中第一个对象的位置 */
 	slabp->s_mem = objp + colour_off;
 	slabp->nodeid = nodeid;
 	return slabp;
@@ -2813,6 +2833,7 @@ static void slab_map_pages(struct kmem_cache *cache, struct slab *slab,
  * Grow (by 1) the number of slabs within a cache.  This is called by
  * kmem_cache_alloc() when there are no active objs left in a cache.
  */
+/* 当slab缓存无空闲对象时，从伙伴系统申请slab补充slab缓存的空闲对象 */
 static int cache_grow(struct kmem_cache *cachep,
 		gfp_t flags, int nodeid, void *objp)
 {
@@ -2835,13 +2856,16 @@ static int cache_grow(struct kmem_cache *cachep,
 
 	/* Get colour for the slab, and cal the next value. */
 	offset = l3->colour_next;
+	/* 计算下一个slab的着色'颜色'，即偏移倍数 */
 	l3->colour_next++;
 	if (l3->colour_next >= cachep->colour)
 		l3->colour_next = 0;
 	spin_unlock(&l3->list_lock);
 
+	/* 当前分配slab的着色偏移长度 */
 	offset *= cachep->colour_off;
 
+	/* __GFP_WAIT表示当前上下文可被睡眠，则打开中断 */
 	if (local_flags & __GFP_WAIT)
 		local_irq_enable();
 
@@ -2857,12 +2881,14 @@ static int cache_grow(struct kmem_cache *cachep,
 	 * Get mem for the objs.  Attempt to allocate a physical page from
 	 * 'nodeid'.
 	 */
+	/* 从伙伴系统中分配阶为cachep->gfporder的空闲内存块，并设置页被slab占用 */
 	if (!objp)
 		objp = kmem_getpages(cachep, local_flags, nodeid);
 	if (!objp)
 		goto failed;
 
 	/* Get slab management. */
+	/* 分配slab描述符对象 */
 	slabp = alloc_slabmgmt(cachep, objp, offset,
 			local_flags & ~GFP_CONSTRAINT_MASK, nodeid);
 	if (!slabp)
@@ -2879,10 +2905,13 @@ static int cache_grow(struct kmem_cache *cachep,
 	spin_lock(&l3->list_lock);
 
 	/* Make slab active. */
+	/* 将新分配的slab插入本地结点slabs_free全部对象空闲的slab链表 */
 	list_add_tail(&slabp->list, &(l3->slabs_free));
 	STATS_INC_GROWN(cachep);
+	/* 更新slab缓存本地结点空闲对象数量，增加cachep->num */
 	l3->free_objects += cachep->num;
 	spin_unlock(&l3->list_lock);
+	/* 返回1表示slab分配成功 */
 	return 1;
 opps1:
 	kmem_freepages(cachep, objp);
@@ -3098,18 +3127,24 @@ must_grow:
 alloc_done:
 	spin_unlock(&l3->list_lock);
 
+	/* 如果未从共享CPU高速缓存或本地结点slab缓存分配到任何空闲对象，则从伙伴系统请求slab */
 	if (unlikely(!ac->avail)) {
 		int x;
+		/* 从伙伴系统申请slab，返回0表示失败 */
 		x = cache_grow(cachep, flags | GFP_THISNODE, node, NULL);
 
 		/* cache_grow can reenable interrupts, then ac could change. */
+		/* cache_grow可能导致睡眠，当前上下文重新得到执行时，本地CPU高速缓存可能被其他上下文改变 */
 		ac = cpu_cache_get(cachep);
+		/* slab申请失败，且本地CPU高速缓存中空闲对象依旧为空，则直接返回失败 */
 		if (!x && ac->avail == 0)	/* no objects in sight? abort */
 			return NULL;
 
+		/* 如果分配到的空闲对象数量为空，则在从伙伴系统请求slab之后重新尝试分配空闲对象 */
 		if (!ac->avail)		/* objects refilled by interrupt? */
 			goto retry;
 	}
+	/* 从slab缓存中填充空闲对象到本地CPU高速缓存后，LIFO取高速缓存的最后一个空闲对象 */
 	ac->touched = 1;
 	return ac->entry[--ac->avail];
 }
