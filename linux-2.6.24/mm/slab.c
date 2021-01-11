@@ -261,12 +261,18 @@ struct slab_rcu {
  * footprint.
  *
  */
+/* 空闲对象的'每CPU'高速缓存，与伙伴系统页框的'每CPU'高速缓存类似 */
 struct array_cache {
+	/* 本地CPU高速缓存中空闲对象的数量 */
 	unsigned int avail;
+	/* 空闲对象的上限 */
 	unsigned int limit;
+	/* 当本地CPU高速缓存中空闲对象过多或没有时，向slab缓存释放或请求的空闲对象个数 */
 	unsigned int batchcount;
+	/* 标识本地CPU空闲对象高速缓存是否被使用 */
 	unsigned int touched;
 	spinlock_t lock;
+	/* 空闲对象的指针数组，采用LIFO方式保证分配的对象依旧驻留在硬件高速缓存的可能性 */
 	void *entry[];	/*
 			 * Must have this definition in here for the proper
 			 * alignment of array_cache. Also simplifies accessing
@@ -287,14 +293,21 @@ struct arraycache_init {
 /*
  * The slab lists for all objects.
  */
+/* 单结点slab链表描述符 */
 struct kmem_list3 {
+	/* 包含空闲对象和已分配对象的slab描述符链表 */
 	struct list_head slabs_partial;	/* partial list first, better asm code */
+	/* 只包含已分配对象的slab描述符链表 */
 	struct list_head slabs_full;
+	/* 只包含空闲对象的slab描述符链表 */
 	struct list_head slabs_free;
+	/* 当前结点slab缓存中空闲对象个数 */
 	unsigned long free_objects;
+	/* 当前结点slab缓存中空闲对象上线，超过时需向伙伴系统是否空闲内存块 */
 	unsigned int free_limit;
 	unsigned int colour_next;	/* Per-node cache coloring */
 	spinlock_t list_lock;
+	/* 本结点slab缓存共享的CPU高速缓存，当本地CPU高速缓存不满足时，可优先从该共享高速缓存中分配 */
 	struct array_cache *shared;	/* shared per node */
 	struct array_cache **alien;	/* on other nodes */
 	unsigned long next_reap;	/* updated without locking */
@@ -377,7 +390,17 @@ static void kmem_list3_init(struct kmem_list3 *parent)
  *
  * manages a cache.
  */
-
+/*
+ * slab缓存结构描述符
+ *
+ * 伙伴系统以页框为单位管理内存空间，对于小字节数量的内存分配请求，伙伴系统无法有效管理
+ * 且系统中存在频繁分配和释放某一类数据结构的操作
+ *
+ * 为进一步优化内存管理，Linux内核在伙伴系统之上构建用于对象大小的内存分配器——slab分配器
+ * 1、将不同的对象划分为高速缓存组，每个高速缓存组存放不同类型的对象；
+ * 2、每个高速缓存又由多个slab组成，slab由一个或多个物理连续的页框组成；
+ * 3、每个slab可处于满、部分满、或空等三种状态，当全部slab对象均占满时，则从伙伴系统请求slab补充；
+ */
 struct kmem_cache {
 /* 1) per-cpu data, touched during every alloc/free */
 	struct array_cache *array[NR_CPUS];
@@ -410,6 +433,7 @@ struct kmem_cache {
 	void (*ctor)(struct kmem_cache *, void *);
 
 /* 5) cache creation/removal */
+	/* 高速缓存名称，唯一确定一个高速缓存 */
 	const char *name;
 	struct list_head next;
 
@@ -447,6 +471,7 @@ struct kmem_cache {
 	 * We still use [MAX_NUMNODES] and not [1] or [0] because cache_cache
 	 * is statically defined, so we reserve the max number of nodes.
 	 */
+	/* 用于组织slab缓存中的所有slab，不同内存结点的slab单独维护 */
 	struct kmem_list3 *nodelists[MAX_NUMNODES];
 	/*
 	 * Do not add fields after nodelists[]
@@ -664,6 +689,11 @@ static struct arraycache_init initarray_generic =
     { {0, BOOT_CPUCACHE_ENTRIES, 1, 0} };
 
 /* internal cache of cache description objs */
+/*
+ * kmem_cache的高速缓存
+ * 每丛台创建一个高速缓存时需从kmem_cache对象的高速缓存分配一个kmem_cache对象，即高速缓存的创建依赖高速缓存的存在
+ * 这和“鸡生蛋、蛋生鸡”一样是一个伪命题，为解决该问题，采用静态初始化方式创建kmem_cache对象的高速缓存
+ */
 static struct kmem_cache cache_cache = {
 	.batchcount = 1,
 	.limit = BOOT_CPUCACHE_ENTRIES,
@@ -733,7 +763,9 @@ static inline void init_lock_keys(void)
  * 1. Guard access to the cache-chain.
  * 2. Protect sanity of cpu_online_map against cpu hotplug events
  */
+/* 保护slab缓存描述符链表的互斥锁 */
 static DEFINE_MUTEX(cache_chain_mutex);
+/* slab缓存描述符链表，所有slab缓存均挂在该链表上 */
 static struct list_head cache_chain;
 
 /*
@@ -1413,6 +1445,7 @@ static void init_list(struct kmem_cache *cachep, struct kmem_list3 *list,
  * Initialisation.  Called after the page allocator have been initialised and
  * before smp_init().
  */
+/* 初始化高速缓存 */
 void __init kmem_cache_init(void)
 {
 	size_t left_over;
@@ -2148,6 +2181,7 @@ static int __init_refok setup_cpu_cache(struct kmem_cache *cachep)
  * cacheline.  This can be beneficial if you're counting cycles as closely
  * as davem.
  */
+/* 创建一个名称为name，对象大小为size的slab缓存 */
 struct kmem_cache *
 kmem_cache_create (const char *name, size_t size, size_t align,
 	unsigned long flags,
@@ -2159,6 +2193,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	/*
 	 * Sanity checks... these are all serious usage bugs.
 	 */
+	/* 不允许在中断上下文中调用，该函数可能会触发睡眠 */
 	if (!name || in_interrupt() || (size < BYTES_PER_WORD) ||
 	    size > KMALLOC_MAX_SIZE) {
 		printk(KERN_ERR "%s: Early error in slab %s\n", __FUNCTION__,
@@ -2172,6 +2207,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	 */
 	mutex_lock(&cache_chain_mutex);
 
+	/* 遍历slab缓存列表，判断是否存在重名高速缓存，若存在则分配失败 */
 	list_for_each_entry(pc, &cache_chain, next) {
 		char tmp;
 		int res;
@@ -2226,6 +2262,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	 * unaligned accesses for some archs when redzoning is used, and makes
 	 * sure any on-slab bufctl's are also correctly aligned.
 	 */
+	/* size按字对齐 */
 	if (size & (BYTES_PER_WORD - 1)) {
 		size += (BYTES_PER_WORD - 1);
 		size &= ~(BYTES_PER_WORD - 1);
@@ -2234,12 +2271,19 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	/* calculate the final buffer alignment: */
 
 	/* 1) arch recommendation: can be overridden for debug */
+	/*
+	 * 对齐时考虑硬件缓存行，保证单个硬件缓存行尽可能多的容下缓存对象
+	 *
+	 * 避免两个或多个对象尽管位于不同的内存地址，但映射到相同的高速缓存行，导致更高的cache miss
+	 * 这种对齐方式可提高整体性能，到需浪费更多的内存消耗
+	 */
 	if (flags & SLAB_HWCACHE_ALIGN) {
 		/*
 		 * Default alignment: as specified by the arch code.  Except if
 		 * an object is really small, then squeeze multiple objects into
 		 * one cacheline.
 		 */
+		/* 按2的倍数均分单个硬件缓存行，且保证均分之后的大小“恰好”容下缓存对象 */
 		ralign = cache_line_size();
 		while (size <= ralign / 2)
 			ralign /= 2;
@@ -2280,11 +2324,13 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	align = ralign;
 
 	/* Get cache's description obj. */
+	/* 从cache_chche中为新的高速缓存分配一个struct kmem_cache高速缓存描述符，并初始化为0 */
 	cachep = kmem_cache_zalloc(&cache_cache, GFP_KERNEL);
 	if (!cachep)
 		goto oops;
 
 #if DEBUG
+	/* 按BYTES_PER_WORD/SLAB_RED_ZONE内存对齐之后的缓存对象大小 */
 	cachep->obj_size = size;
 
 	/*
@@ -2363,6 +2409,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	cachep->colour = left_over / cachep->colour_off;
 	cachep->slab_size = slab_size;
 	cachep->flags = flags;
+	/* 高速缓存无空闲对象分配时，从伙伴系统请求slab补充时的空闲块分配掩码 */
 	cachep->gfpflags = 0;
 	if (CONFIG_ZONE_DMA_FLAG && (flags & SLAB_CACHE_DMA))
 		cachep->gfpflags |= GFP_DMA;
@@ -2380,6 +2427,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 		 */
 		BUG_ON(ZERO_OR_NULL_PTR(cachep->slabp_cache));
 	}
+	/* 高速缓存对象的构造函数，当新的页追加到高速缓存时，构造函数才被调用 */
 	cachep->ctor = ctor;
 	cachep->name = name;
 
@@ -2390,8 +2438,10 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	}
 
 	/* cache setup completed, link it into the list */
+	/* 将新分配的slab缓存cachep挂在全局链表cache_chain上 */
 	list_add(&cachep->next, &cache_chain);
 oops:
+	/* 高速缓存对象分配失败且SLAB_PANIC置位，则触发panic */
 	if (!cachep && (flags & SLAB_PANIC))
 		panic("kmem_cache_create(): failed to create slab `%s'\n",
 		      name);
@@ -2569,6 +2619,12 @@ EXPORT_SYMBOL(kmem_cache_shrink);
  *
  * The caller must guarantee that noone will allocate memory from the cache
  * during the kmem_cache_destroy().
+ */
+/*
+ * 销毁一个高速缓存
+ * 调用该函数前需确保：
+ * 1、高速缓存中的所有slab必须为空；
+ * 2、kmem_cache_destory执行期间不再访问即将销毁的高速缓存；
  */
 void kmem_cache_destroy(struct kmem_cache *cachep)
 {
@@ -2954,6 +3010,7 @@ bad:
 #define check_slabp(x,y) do { } while(0)
 #endif
 
+/* 从slab缓存中获取ac->batchcount个空闲对象填充本地CPU高速缓存，再从CPU高速缓存中分配 */
 static void *cache_alloc_refill(struct kmem_cache *cachep, gfp_t flags)
 {
 	int batchcount;
@@ -2975,27 +3032,34 @@ retry:
 		 */
 		batchcount = BATCHREFILL_LIMIT;
 	}
+	/* 本地结点的slab缓存链表描述符 */
 	l3 = cachep->nodelists[node];
 
 	BUG_ON(ac->avail > 0 || !l3);
 	spin_lock(&l3->list_lock);
 
 	/* See if we can refill from the shared array */
+	/* 本地结点的slab缓存存在共享CPU高速缓存时，从该共享CPU高速缓存中分配填充 */
 	if (l3->shared && transfer_objects(ac, l3->shared, batchcount))
 		goto alloc_done;
 
+	/* 无共享CPU高速缓存或不满足分配时，循环从本地结点的slab缓存分配填充，直到填充成功，或空闲对象耗尽时从伙伴系统请求补充slab */
 	while (batchcount > 0) {
 		struct list_head *entry;
 		struct slab *slabp;
 		/* Get slab alloc is to come from. */
+		/* 优先从部分空闲的slab中分配 */
 		entry = l3->slabs_partial.next;
+		/* 若不存在部分空闲的slab，即slabs_partial链表为空，则从完全空闲的slab中分配 */
 		if (entry == &l3->slabs_partial) {
 			l3->free_touched = 1;
 			entry = l3->slabs_free.next;
+			/* 若不存在完全空闲的slab，即slabs_free链表为空，则需从伙伴系统中请求分配slab */
 			if (entry == &l3->slabs_free)
 				goto must_grow;
 		}
 
+		/* 存在满足分配的slab */
 		slabp = list_entry(entry, struct slab, list);
 		check_slabp(cachep, slabp);
 		check_spinlock_acquired(cachep);
@@ -3007,6 +3071,7 @@ retry:
 		 */
 		BUG_ON(slabp->inuse < 0 || slabp->inuse >= cachep->num);
 
+		/* 从满足分配的slab中获取空闲对象填充到本地CPU高速缓存，直到slab空闲对象耗尽或填充成功 */
 		while (slabp->inuse < cachep->num && batchcount--) {
 			STATS_INC_ALLOCED(cachep);
 			STATS_INC_ACTIVE(cachep);
@@ -3018,7 +3083,9 @@ retry:
 		check_slabp(cachep, slabp);
 
 		/* move slabp to correct slabp list: */
+		/* 根据当前满足分配slab的空闲对象消耗情况，将slab插入对应链表 */
 		list_del(&slabp->list);
+		/* slab->free为BUFCTL_END表示空闲对象已耗尽，将slab插入full链表，否则插入partial链表 */
 		if (slabp->free == BUFCTL_END)
 			list_add(&slabp->list, &l3->slabs_full);
 		else
@@ -3026,6 +3093,7 @@ retry:
 	}
 
 must_grow:
+	/* 分配结束(分配成功或slab耗尽)时，更新本地结点的slab缓存空闲对象数量，ac->avail表示已填充的数量 */
 	l3->free_objects -= ac->avail;
 alloc_done:
 	spin_unlock(&l3->list_lock);
@@ -3194,13 +3262,21 @@ static inline void *____cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 
 	check_irq_off();
 
+	/* 获取高速缓存cachep的本地CPU空闲对象高速缓存 */
 	ac = cpu_cache_get(cachep);
+	/* avail值表示本地CPU高速缓存中空闲对象数量 */
 	if (likely(ac->avail)) {
+		/* 增加缓存命中统计 */
 		STATS_INC_ALLOCHIT(cachep);
+		/* touched置1表示本地CPU缓存最近被使用 */
 		ac->touched = 1;
+		/* 直接从本地CPU高速缓存的空闲对象数组的末端获取空闲对象满足分配 */
 		objp = ac->entry[--ac->avail];
+	/* 如果cachep的本地CPU高速缓存无空闲对象 */
 	} else {
+		/* 增加缓存未命中统计 */
 		STATS_INC_ALLOCMISS(cachep);
+		/* 从slab缓存中获取ac->batchcount个空闲对象填充本地CPU高速缓存，再从CPU高速缓存中分配 */
 		objp = cache_alloc_refill(cachep, flags);
 	}
 	return objp;
@@ -3615,8 +3691,13 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp)
  * Allocate an object from this cache.  The flags are only relevant
  * if the cache has no available objects.
  */
+/* 从高速缓存cachep中分配一个缓存对象 */
 void *kmem_cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 {
+	/*
+	 * __builtin_return_address(0)用于得到当前函数的返回地址，即__cache_alloc的返回地址
+	 * __builtin_return_address(1)用于得到当前函数调用者的返回地址，即kmem_cache_alloc的返回地址
+	 */
 	return __cache_alloc(cachep, flags, __builtin_return_address(0));
 }
 EXPORT_SYMBOL(kmem_cache_alloc);

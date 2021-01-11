@@ -1592,7 +1592,7 @@ restart:
 	 * policy or is asking for __GFP_HIGH memory.  GFP_ATOMIC requests will
 	 * set both ALLOC_HARDER (!wait) and ALLOC_HIGH (__GFP_HIGH).
 	 */
-	/* 执行第二次内存管理区扫描，将低请求检查水位线，以ALLOC_WMARK_MIN请求内存 */
+	/* 执行第二次内存管理区扫描，降低请求检查水位线，以ALLOC_WMARK_MIN请求内存 */
 	alloc_flags = ALLOC_WMARK_MIN;
 	if ((unlikely(rt_task(p)) && !in_interrupt()) || !wait)
 		alloc_flags |= ALLOC_HARDER;
@@ -1648,6 +1648,7 @@ nofail_alloc:
 	cond_resched();
 
 	/* We now go into synchronous reclaim */
+	/* 同步回收内存 */
 	cpuset_memory_pressure_bump();
 	p->flags |= PF_MEMALLOC;
 	reclaim_state.reclaimed_slab = 0;
@@ -1663,6 +1664,7 @@ nofail_alloc:
 	if (order != 0)
 		drain_all_local_pages();
 
+	/* 如果回收了部分页框，则再次以ALLOC_WMARK_MIN请求内存 */
 	if (likely(did_some_progress)) {
 		page = get_page_from_freelist(gfp_mask, order,
 						zonelist, alloc_flags);

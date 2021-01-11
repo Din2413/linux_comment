@@ -19,11 +19,16 @@
  * The ones marked DEBUG are only valid if CONFIG_SLAB_DEBUG is set.
  */
 #define SLAB_DEBUG_FREE		0x00000100UL	/* DEBUG: Perform (expensive) checks on free */
+/* 在已分配的内存周围插入"红色警界区"，可用于调试对内存越界访问的异常 */
 #define SLAB_RED_ZONE		0x00000400UL	/* DEBUG: Red zone objs in a cache */
+/* 使用已知的值a5a5a5a5填充slab，可用于调试对未初始化内存访问的异常 */
 #define SLAB_POISON		0x00000800UL	/* DEBUG: Poison objects */
+/* 让高速缓存内对象按硬件高速缓存对齐，避免不同内存地址的对象映射到相同的硬件缓存地址，造成较高的cache miss */
 #define SLAB_HWCACHE_ALIGN	0x00002000UL	/* Align objs on cache lines */
+/* 使用GFP_DMA指定的管理区zone补充高速缓存slab内存 */
 #define SLAB_CACHE_DMA		0x00004000UL	/* Use GFP_DMA memory */
 #define SLAB_STORE_USER		0x00010000UL	/* DEBUG: Store the last owner for bug hunting */
+/* 高速缓存对象分配失败时触发panic */
 #define SLAB_PANIC		0x00040000UL	/* Panic if kmem_cache_create() fails */
 #define SLAB_DESTROY_BY_RCU	0x00080000UL	/* Defer freeing slabs to RCU */
 #define SLAB_MEM_SPREAD		0x00100000UL	/* Spread some memory over cpuset */
