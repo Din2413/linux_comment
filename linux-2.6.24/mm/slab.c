@@ -218,11 +218,20 @@ typedef unsigned int kmem_bufctl_t;
  * for a slab, or allocated from an general cache.
  * Slabs are chained into three list: fully used, partial, fully free slabs.
  */
+/* slab描述符，每个slab缓存包含一个或多个slab描述符对象 */
 struct slab {
 	struct list_head list;
+	/* slab中首个对象的首部偏移 */
 	unsigned long colouroff;
+	/* slab中首个对象的起始地址，后面对象根据该地址计算得出 */
 	void *s_mem;		/* including colour offset */
 	unsigned int inuse;	/* num of objs active in slab */
+	/*
+	 * slab中下次分配的空闲对象index，可由free起始按序遍历空闲对象列表，直到index为BUFCTL_END结束
+	 *
+	 * 每个slab描述符对象末尾都会紧跟一个类型为kmem_bufctl_t、大小为cachep->num的数组
+	 * 每个数组元素对应一个slab对象，其按序存放下一个空闲对象的数组下标index，空闲对象地址可根据(s_mem + cachep->buffer_size * index)得到
+	 */
 	kmem_bufctl_t free;
 	unsigned short nodeid;
 };
@@ -873,12 +882,14 @@ static void cache_estimate(unsigned long gfporder, size_t buffer_size,
 	 * the slabs are all pages aligned, the objects will be at the
 	 * correct alignment when allocated.
 	 */
+	/* struct slab结构体外置时，slab页框全部用于存储缓存对象 */
 	if (flags & CFLGS_OFF_SLAB) {
 		mgmt_size = 0;
 		nr_objs = slab_size / buffer_size;
 
 		if (nr_objs > SLAB_LIMIT)
 			nr_objs = SLAB_LIMIT;
+	/* struct slab结构体内置时，则slab页框除用于分配缓存对象外，也用于struct slab和kmem_bufctl_t */
 	} else {
 		/*
 		 * Ignore padding for the initial guess. The padding
@@ -1711,6 +1722,7 @@ static void *kmem_getpages(struct kmem_cache *cachep, gfp_t flags, int nodeid)
 #endif
 
 	flags |= cachep->gfpflags;
+	/* SLAB_RECLAIM_ACCOUNT置位，则从伙伴系统migratetype类型为可回收的内存中分配 */
 	if (cachep->flags & SLAB_RECLAIM_ACCOUNT)
 		flags |= __GFP_RECLAIMABLE;
 
@@ -1719,10 +1731,12 @@ static void *kmem_getpages(struct kmem_cache *cachep, gfp_t flags, int nodeid)
 		return NULL;
 
 	nr_pages = (1 << cachep->gfporder);
+	/* SLAB_RECLAIM_ACCOUNT置位，则分配的页为可回收类型，对应NR_SLAB_RECLAIMABLE类型 */
 	if (cachep->flags & SLAB_RECLAIM_ACCOUNT)
 		add_zone_page_state(page_zone(page),
 			NR_SLAB_RECLAIMABLE, nr_pages);
 	else
+		/* SLAB_RECLAIM_ACCOUNT未置位，则分配的页为不可回收类型，对应NR_SLAB_UNRECLAIMABLE类型 */
 		add_zone_page_state(page_zone(page),
 			NR_SLAB_UNRECLAIMABLE, nr_pages);
 	/* 设置page->flag的PG_slab标志，表示该页帧被slab缓存占用 */
@@ -1740,6 +1754,7 @@ static void kmem_freepages(struct kmem_cache *cachep, void *addr)
 	struct page *page = virt_to_page(addr);
 	const unsigned long nr_freed = i;
 
+	/* slab可回收 */
 	if (cachep->flags & SLAB_RECLAIM_ACCOUNT)
 		sub_zone_page_state(page_zone(page),
 				NR_SLAB_RECLAIMABLE, nr_freed);
@@ -2069,18 +2084,26 @@ static size_t calculate_slab_order(struct kmem_cache *cachep,
 		size_t remainder;
 
 		cache_estimate(gfporder, size, align, flags, &remainder, &num);
+		/* 如果计算出来的对象数为0则要增大页框阶数再重新进行计算 */
 		if (!num)
 			continue;
 
+		/* 当size较大(>=PAGE_SIZE/8)时，采用struct slab外置存储 */
 		if (flags & CFLGS_OFF_SLAB) {
 			/*
 			 * Max number of objs-per-slab for caches which
 			 * use off-slab slabs. Needed to avoid a possible
 			 * looping condition in cache_grow().
 			 */
+			/*
+			 * offslab_limit记录在外部存储slab描述符时所允许的slab最大对象数
+			 * 分配前不能确定缓存对象的个数实际上限值，若统一采用SLAB_LIMIT限制，则会导致首次slab缓存分配占用页框较多，浪费物理内存空间
+			 * 为避免空间浪费问题，slab内置则在首次满足num非0的阶数时停止，而slab外置则就地取材利用缓存对象的大小计算offslab_limit限制slab对象数
+			 */
 			offslab_limit = size - sizeof(struct slab);
 			offslab_limit /= sizeof(kmem_bufctl_t);
 
+			/* 如果前面计算的对象数num大于offslab_limit，表示此页框阶数过大，不再满足分配，跳出循环并采用上一次的分配结果 */
  			if (num > offslab_limit)
 				break;
 		}
@@ -2207,7 +2230,12 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	/*
 	 * Sanity checks... these are all serious usage bugs.
 	 */
-	/* 不允许在中断上下文中调用，该函数可能会触发睡眠 */
+	/*
+	 * 不允许在中断上下文中调用，该函数可能会触发睡眠
+	 *
+	 * 睡眠会导致进程调度，而调度会执行上下文切换（切换进程寄存器/内存空间），但中断处于中断上下文，部分寄存器状态已被改变，当前系统状态不是一个完整的进程上下文状态；
+	 * 睡眠会将current插入等待队列，等待队列只会唤醒阻塞进程，并不会触发中断再次执行，中断只由硬件产生；
+	 */
 	if (!name || in_interrupt() || (size < BYTES_PER_WORD) ||
 	    size > KMALLOC_MAX_SIZE) {
 		printk(KERN_ERR "%s: Early error in slab %s\n", __FUNCTION__,
@@ -2344,7 +2372,6 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 		goto oops;
 
 #if DEBUG
-	/* 按BYTES_PER_WORD/SLAB_RED_ZONE内存对齐之后的缓存对象大小 */
 	cachep->obj_size = size;
 
 	/*
@@ -2380,6 +2407,11 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	 * (bootstrapping cannot cope with offslab caches so don't do
 	 * it too early on.)
 	 */
+	/*
+	 * 默认采用struct slab在slab缓存页框上分配
+	 * 当对象较大(>=PAGE_SIZE/3)且不处于slab初始化节点时
+	 * 则采用在slab缓存页框外分配，以腾出更多空间给缓存对象
+	 */
 	if ((size >= (PAGE_SIZE >> 3)) && !slab_early_init)
 		/*
 		 * Size is large, assume best to place the slab management obj
@@ -2387,8 +2419,10 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 		 */
 		flags |= CFLGS_OFF_SLAB;
 
+	/* 将对象大小按之前确定的align对齐 */
 	size = ALIGN(size, align);
 
+	/* 计算分配给slab的页框阶数并确定slab的对象数，并返回slab的剩余未被对象占用空间，即碎片大小 */
 	left_over = calculate_slab_order(cachep, size, align, flags);
 
 	if (!cachep->num) {
@@ -2398,6 +2432,7 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 		cachep = NULL;
 		goto oops;
 	}
+	/* slab管理对象大小，包含struct slab和kmem_bufctl_t数组 */
 	slab_size = ALIGN(cachep->num * sizeof(kmem_bufctl_t)
 			  + sizeof(struct slab), align);
 
@@ -2405,11 +2440,16 @@ kmem_cache_create (const char *name, size_t size, size_t align,
 	 * If the slab has been placed off-slab, and we have enough space then
 	 * move it on-slab. This is at the expense of any extra colouring.
 	 */
+	/*
+	 * CFLGS_OFF_SLAB置位但剩余空间大于slab管理对象占用空间时，也强制采用内部slab
+	 * 节省外部空间占用，但会牺牲着色的颜色个数
+	 */
 	if (flags & CFLGS_OFF_SLAB && left_over >= slab_size) {
 		flags &= ~CFLGS_OFF_SLAB;
 		left_over -= slab_size;
 	}
 
+	/* slab管理对象处在slab外部，则不用考虑按align对齐 */
 	if (flags & CFLGS_OFF_SLAB) {
 		/* really off slab. No need for manual alignment */
 		slab_size =
@@ -2689,7 +2729,7 @@ static struct slab *alloc_slabmgmt(struct kmem_cache *cachep, void *objp,
 					      local_flags & ~GFP_THISNODE, nodeid);
 		if (!slabp)
 			return NULL;
-	/* slab管理区位于slab中 */
+	/* slab管理区位于slab中，则slab描述符位于slab内存头部 */
 	} else {
 		/* objp为slab首页面的虚拟地址，加上着色偏移得到slab描述符对象的虚拟地址 */
 		slabp = objp + colour_off;
@@ -2749,11 +2789,14 @@ static void cache_init_objs(struct kmem_cache *cachep,
 			kernel_map_pages(virt_to_page(objp),
 					 cachep->buffer_size / PAGE_SIZE, 0);
 #else
+		/* 在分配slab时，才调用ctor构造函数初始化对象 */
 		if (cachep->ctor)
 			cachep->ctor(cachep, objp);
 #endif
+		/* 按初始顺序递增kmem_bufctl_t数组的index索引 */
 		slab_bufctl(slabp)[i] = i + 1;
 	}
+	/* 设置slab空闲对象列表的起始和结束index */
 	slab_bufctl(slabp)[i - 1] = BUFCTL_END;
 	slabp->free = 0;
 }
@@ -2768,23 +2811,28 @@ static void kmem_flagcheck(struct kmem_cache *cachep, gfp_t flags)
 	}
 }
 
+/* 从slab中分配一个对象 */
 static void *slab_get_obj(struct kmem_cache *cachep, struct slab *slabp,
 				int nodeid)
 {
+	/* 由slab->s_mem和slab->free计算满足本次分配的空闲对象地址 */
 	void *objp = index_to_obj(cachep, slabp, slabp->free);
 	kmem_bufctl_t next;
 
 	slabp->inuse++;
+	/* 获取满足下一次分配的空闲对象index */
 	next = slab_bufctl(slabp)[slabp->free];
 #if DEBUG
 	slab_bufctl(slabp)[slabp->free] = BUFCTL_FREE;
 	WARN_ON(slabp->nodeid != nodeid);
 #endif
+	/* 将满足下一次分配的空闲对象index记录再slab->free中，加快下次分配 */
 	slabp->free = next;
 
 	return objp;
 }
 
+/* 往slab中释放一个对象 */
 static void slab_put_obj(struct kmem_cache *cachep, struct slab *slabp,
 				void *objp, int nodeid)
 {
@@ -3873,6 +3921,7 @@ EXPORT_SYMBOL(__kmalloc);
  * Free an object which was previously allocated from this
  * cache.
  */
+/* 解除slab对象分配 */
 void kmem_cache_free(struct kmem_cache *cachep, void *objp)
 {
 	unsigned long flags;

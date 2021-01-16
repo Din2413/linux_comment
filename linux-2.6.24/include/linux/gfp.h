@@ -109,6 +109,7 @@ struct vm_area_struct;
 /* Convert GFP flags to their corresponding migrate type */
 static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 {
+	/* __GFP_MOVABLE 和 __GFP_RECLAIMABLE不可同时存在 */
 	WARN_ON((gfp_flags & GFP_MOVABLE_MASK) == GFP_MOVABLE_MASK);
 
 	/* 内存可移动功能未开启时，空闲内存块的可移动类型均为MIGRATE_UNMOVABLE不可移动 */

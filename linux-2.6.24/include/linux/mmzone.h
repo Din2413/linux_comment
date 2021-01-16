@@ -34,8 +34,11 @@
  */
 #define PAGE_ALLOC_COSTLY_ORDER 3
 
+/* 不可移动内存 */
 #define MIGRATE_UNMOVABLE     0
+/* 可回收内存，由__GFP_RECLAIMABLE指定 */
 #define MIGRATE_RECLAIMABLE   1
+/* 可移动内存，由__GFP_MOVABLE指定 */
 #define MIGRATE_MOVABLE       2
 #define MIGRATE_RESERVE       3
 #define MIGRATE_ISOLATE       4 /* can't allocate from here */
