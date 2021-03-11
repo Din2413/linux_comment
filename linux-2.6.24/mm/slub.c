@@ -216,15 +216,25 @@ static int kmem_size = sizeof(struct kmem_cache);
 static struct notifier_block slab_notifier;
 #endif
 
+/*
+ * 全局变量slab_state用于记录slub分配器的状态
+ */
 static enum {
+	/* 还没有开始建立slub分配器 */
 	DOWN,		/* No slab functionality available */
+	/* kmem_cache_node缓存已创建，但通用缓存未创建 */
 	PARTIAL,	/* kmem_cache_open() works but kmalloc does not */
+	/* slub通用缓存已创建 */
 	UP,		/* Everything works but does not show up in sysfs */
+	/* slub “/sys/kernel/slab/”节点已经创建 */
 	SYSFS		/* Sysfs up */
 } slab_state = DOWN;
 
 /* A list of all slab caches on the system */
 static DECLARE_RWSEM(slub_lock);
+/*
+ * SLUB分配器中高速缓存链表
+ */
 static LIST_HEAD(slab_caches);
 
 /*
@@ -253,12 +263,13 @@ static inline void sysfs_slab_remove(struct kmem_cache *s) {}
 /********************************************************************
  * 			Core slab cache functions
  *******************************************************************/
-
+/* slub分配器是否可用，slab_state状态为UP表示kmem_cache_node和kmalloc通用缓存均创建ok */
 int slab_is_available(void)
 {
 	return slab_state >= UP;
 }
 
+/* 获取对应结点的kmem_cache_node，一致性内存访问只有一个，非一致性内存访问则根据node返回 */
 static inline struct kmem_cache_node *get_node(struct kmem_cache *s, int node)
 {
 #ifdef CONFIG_NUMA
@@ -268,6 +279,7 @@ static inline struct kmem_cache_node *get_node(struct kmem_cache *s, int node)
 #endif
 }
 
+/* 获取对应CPU的kmem_cache_cpu高速缓存，非对称多处理系统只有一个，对称多处理系统则根据cpu返回 */
 static inline struct kmem_cache_cpu *get_cpu_slab(struct kmem_cache *s, int cpu)
 {
 #ifdef CONFIG_SMP
@@ -301,8 +313,14 @@ static inline int check_valid_pointer(struct kmem_cache *s,
  * we avoid to do in the fast alloc free paths. There we obtain the offset
  * from the page struct.
  */
+/* 获取缓存对象object内的、指向下一空闲对象的指针 */
 static inline void *get_freepointer(struct kmem_cache *s, void *object)
 {
+	/*
+	 * kmem_cache.offset存在两种值，一种为0，一种为kmem_cache.objsize + word_align
+	 * 前者表示freepointer存放在object首地址位置，在ctor/poison未指定时
+	 * 后者表示freepointer存放在object有效数据尾部，在ctor/poison指定时
+	 */
 	return *(void **)(object + s->offset);
 }
 
@@ -312,11 +330,13 @@ static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
 }
 
 /* Loop over all objects in a slab */
+/* 遍历一个slab中的所有对象，objects表示一个slab中对象个数，size表示一个对象占用的字节空间 */
 #define for_each_object(__p, __s, __addr) \
 	for (__p = (__addr); __p < (__addr) + (__s)->objects * (__s)->size;\
 			__p += (__s)->size)
 
 /* Scan freelist */
+/* 遍历一个slab的所有空闲对象 */
 #define for_each_free_object(__p, __s, __free) \
 	for (__p = (__free); __p; __p = get_freepointer((__s), __p))
 
@@ -523,6 +543,27 @@ static void slab_err(struct kmem_cache *s, struct page *page, char *fmt, ...)
 	dump_stack();
 }
 
+/*
+ * slub对象布局如下：
+ * 1、第一种布局：poison未开启，且ctor也未指定
+ *   kmem_cache.offset为0、free pointer存放在objsize首地址处；
+ *   word align存放red zone、inuse为alloc tracker的偏移位置
+ * |      inuse                    |
+ * ------------------------------------------------------------------------
+ * | free pointer|    | word align |alloc tracker| free tracker  |obj align|
+ * |       objsize    | (red zone) |             |               |         |
+ * -------------------------------------------------------------------------
+ *
+ * 2、第二种布局：POISON开启/ctor指定
+ *   kmem_cache.offset为objsize + word align、free pointer存放在offset偏移位置；
+ *   word align存放red zone、inuse为free pointer的偏移位置
+ * |      offset          |
+ * |      inuse           |
+ * --------------------------------------------------------------------------------
+ * | objsize | word align | free pointer | alloc tracker| free tracker  |obj align|
+ * |         | (red zone) |              |              |               |         |
+ * --------------------------------------------------------------------------------
+ */
 static void init_object(struct kmem_cache *s, void *object, int active)
 {
 	u8 *p = object;
@@ -1075,6 +1116,7 @@ static void setup_object(struct kmem_cache *s, struct page *page,
 		s->ctor(s, object);
 }
 
+/* 分配slab */
 static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 {
 	struct page *page;
@@ -1092,7 +1134,14 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 
 	n = get_node(s, page_to_nid(page));
 	if (n)
+		/* 递增对应内存结点已分配/未回收的slab缓存数量 */
 		atomic_long_inc(&n->nr_slabs);
+	/*
+	 * page->slab记录slab所属kmem_cache缓存对象
+	 * full slab通常不像partial slab一样采用双链表维护(除非DEBUG开启)，当full slab内对象回收转为
+	 * partial slab后需重新链接到kmem_cache的partial链表中，此时就可以根据page->slab字段获取所属
+	 * kmem_chache缓存对象
+	 */
 	page->slab = s;
 	page->flags |= 1 << PG_slab;
 	if (s->flags & (SLAB_DEBUG_FREE | SLAB_RED_ZONE | SLAB_POISON |
@@ -1114,11 +1163,16 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 	set_freepointer(s, last, NULL);
 
 	page->freelist = start;
+	/*
+	 * inuse代表被占用对象个数，可被分配或在本次CPU高速缓存中
+	 * inuse为0代表slab内对象全部空闲，即slab可被回收
+	 */
 	page->inuse = 0;
 out:
 	return page;
 }
 
+/* 回收slab。当slab中对象全部空闲、即inuse为0时，slab可回收 */
 static void __free_slab(struct kmem_cache *s, struct page *page)
 {
 	int pages = 1 << s->order;
@@ -1161,6 +1215,7 @@ static void free_slab(struct kmem_cache *s, struct page *page)
 		__free_slab(s, page);
 }
 
+/* 将slab从缓存中移除回收 */
 static void discard_slab(struct kmem_cache *s, struct page *page)
 {
 	struct kmem_cache_node *n = get_node(s, page_to_nid(page));
@@ -1339,15 +1394,19 @@ static void unfreeze_slab(struct kmem_cache *s, struct page *page)
 {
 	struct kmem_cache_node *n = get_node(s, page_to_nid(page));
 
+	/* 清楚slab的frozen标志，表示不被本地CPU高速缓存占有 */
 	ClearSlabFrozen(page);
+	/* inuse不为0，表示slab中部分对象处在被分配状态 */
 	if (page->inuse) {
-
+		/* freelist不为NULL，则表示slab存在空闲对象，将slab插入partial链表 */
 		if (page->freelist)
 			add_partial(n, page);
+		/* freelist为NULL，则表示slab不存在空闲对象；当DEBUG开启时，将slab插入full链表，否则不链接管理 */
 		else if (SlabDebug(page) && (s->flags & SLAB_STORE_USER))
 			add_full(n, page);
+		/* 解锁slab，与frozen标志同步更新 */
 		slab_unlock(page);
-
+	/* inuse为0，表示slab中全部对象均空闲，则可回收 */
 	} else {
 		if (n->nr_partial < MIN_PARTIAL) {
 			/*
@@ -1370,6 +1429,7 @@ static void unfreeze_slab(struct kmem_cache *s, struct page *page)
 /*
  * Remove the cpu slab
  */
+/* 将本地CPU的slab迁移到对应结点的partial slab链表 */
 static void deactivate_slab(struct kmem_cache *s, struct kmem_cache_cpu *c)
 {
 	struct page *page = c->page;
@@ -1378,6 +1438,7 @@ static void deactivate_slab(struct kmem_cache *s, struct kmem_cache_cpu *c)
 	 * because both freelists are empty. So this is unlikely
 	 * to occur.
 	 */
+	/* 遍历c->freelist，将空闲对象迁移到page->freelist，并更新inuse值 */
 	while (unlikely(c->freelist)) {
 		void **object;
 
@@ -1391,6 +1452,7 @@ static void deactivate_slab(struct kmem_cache *s, struct kmem_cache_cpu *c)
 		page->inuse--;
 	}
 	c->page = NULL;
+	/* 根据page->inuse决定将slab移到对应结点的partial slab链表还是直接回收 */
 	unfreeze_slab(s, page);
 }
 
@@ -1468,15 +1530,22 @@ static void *__slab_alloc(struct kmem_cache *s,
 	void **object;
 	struct page *new;
 
+	/*
+	 * 本地CPU的slab中没有可分配的内存(初始状态或CPU高速缓存已分配完)，则为其寻找新的slab
+	 */
 	if (!c->page)
 		goto new_slab;
 
 	slab_lock(c->page);
+	/*
+	 * 本地CPU存在slab，但结点不匹配(node不为-1，且c->node != node)
+	 * 则将本地CPU的slab移回c->page对应结点的partial slab链表中
+	 */
 	if (unlikely(!node_match(c, node)))
 		goto another_slab;
 load_freelist:
 	object = c->page->freelist;
-	if (unlikely(!object))
+	if (unlikely(!object)) 
 		goto another_slab;
 	if (unlikely(SlabDebug(c->page)))
 		goto debug;
@@ -1490,9 +1559,11 @@ load_freelist:
 	return object;
 
 another_slab:
+	/* 将本地CPU的slab移回c->page对应结点的partial slab链表中 */
 	deactivate_slab(s, c);
 
 new_slab:
+	/* 从指定结点的partial slab链表中寻找一个可用slab */
 	new = get_partial(s, gfpflags, node);
 	if (new) {
 		c->page = new;
@@ -1502,12 +1573,17 @@ new_slab:
 	if (gfpflags & __GFP_WAIT)
 		local_irq_enable();
 
+	/* 指定结点的partial slab链表中不存在可用slab时，从伙伴系统中分配slab进行补充 */
 	new = new_slab(s, gfpflags, node);
 
 	if (gfpflags & __GFP_WAIT)
 		local_irq_disable();
 
 	if (new) {
+		/*
+		 * 最新分配的slab优先作为本地CPU的高速缓存
+		 * 原有的本地CPU高速缓存需移回到partial(若存在空闲对象，否则移到full链表) slab链表中
+		 */
 		c = get_cpu_slab(s, smp_processor_id());
 		if (c->page)
 			flush_slab(s, c);
@@ -1539,6 +1615,9 @@ debug:
  *
  * Otherwise we can simply pick the next object from the lockless free list.
  */
+/*
+ * slub分配器优先从每CPU高速缓存中分配对象，当其不满足(空或结点不匹配)时，从kmem_cache_node结点缓存中分配
+ */
 static void __always_inline *slab_alloc(struct kmem_cache *s,
 		gfp_t gfpflags, int node, void *addr)
 {
@@ -1547,13 +1626,29 @@ static void __always_inline *slab_alloc(struct kmem_cache *s,
 	struct kmem_cache_cpu *c;
 
 	local_irq_save(flags);
+	/* 获取本地CPU的slub缓存结构 */
 	c = get_cpu_slab(s, smp_processor_id());
+	/*
+	 * 如果本地CPU的slub缓存freelist为空，或者节点不匹配
+	 * 则通过慢速途径分配缓存对象
+	 */
 	if (unlikely(!c->freelist || !node_match(c, node)))
 
 		object = __slab_alloc(s, gfpflags, node, addr, c);
 
+	/*
+	 * 如果本地CPU的slub缓存freelist不为空，且节点匹配
+	 * 则直接从本地 CPU的slub缓存分配
+	 */
 	else {
+		/* 使用freelist指向的对象进行分配 */
 		object = c->freelist;
+		/*
+		 * 每个空闲对象均包含一个指向下一空闲对象的指针
+		 * 且该指针相对空闲对象地址首部的偏移位置记录在c->offset内
+		 *
+		 * 当从本地CPU的freelist分配一个空闲对象后，需将下一个空闲对象地址保存到freelist中
+		 */
 		c->freelist = object[c->offset];
 	}
 	local_irq_restore(flags);
@@ -1564,6 +1659,7 @@ static void __always_inline *slab_alloc(struct kmem_cache *s,
 	return object;
 }
 
+/* 从kmem_cache缓存中所有内存结点分配对象，非NUMA系统中只有一个内存结点，即本地结点 */
 void *kmem_cache_alloc(struct kmem_cache *s, gfp_t gfpflags)
 {
 	return slab_alloc(s, gfpflags, -1, __builtin_return_address(0));
@@ -1571,8 +1667,13 @@ void *kmem_cache_alloc(struct kmem_cache *s, gfp_t gfpflags)
 EXPORT_SYMBOL(kmem_cache_alloc);
 
 #ifdef CONFIG_NUMA
+/* NUMA从kmem_cache缓存中指定结点node分配对象，-1表示所有内存结点均可满足分配 */
 void *kmem_cache_alloc_node(struct kmem_cache *s, gfp_t gfpflags, int node)
 {
+	/*
+	 * __builtin_return_address(0)用于得到当前函数的返回地址，即slab_alloc的返回地址
+	 * __builtin_return_address(1)用于得到当前函数调用者的返回地址，即kmem_cache_alloc_node的返回地址
+	 */
 	return slab_alloc(s, gfpflags, node, __builtin_return_address(0));
 }
 EXPORT_SYMBOL(kmem_cache_alloc_node);
@@ -1713,6 +1814,9 @@ static int slub_min_objects = DEFAULT_MIN_OBJECTS;
 /*
  * Merge control. If this is set then no merging of slab caches will occur.
  * (Could be removed. This was introduced to pacify the merge skeptics.)
+ */
+/*
+ * SLUB缓存复用控制选项，如果设置了这个选项，则不复用SLUB缓存
  */
 static int slub_nomerge;
 
@@ -2047,17 +2151,32 @@ static int init_kmem_cache_nodes(struct kmem_cache *s, gfp_t gfpflags)
 	else
 		local_node = 0;
 
+	/* 遍历系统内全部内存结点，为状态为N_NORMAL_MEMORY的结点创建kmem_cache_node */
 	for_each_node_state(node, N_NORMAL_MEMORY) {
 		struct kmem_cache_node *n;
 
+		/* 节点为本地节点，直接取s->local_node地址，而不用从kmem_cache_node缓存中分配 */
 		if (local_node == node)
 			n = &s->local_node;
 		else {
+			/*
+			 * slab_state为DOWN，则表示kmem_cache_node缓存还未创建
+			 * 即无法分配kmem_cache_node对象
+			 *
+			 * kmem_cache_init初始化SLUB分配器时，slab_state在创建kmem_cache_node缓存后由DOWN变为UP
+			 * 而kmem_cache_node缓存同理也需要调用init_kmem_cache_nodes初始化该缓存的node[MAX_NUMNODES]成员
+			 * 那此时必然不能直接从kmem_cache_node缓存中分配对象，early_kmem_cache_node_alloc即为了解决此问题
+			 */
 			if (slab_state == DOWN) {
 				n = early_kmem_cache_node_alloc(gfpflags,
 								node);
 				continue;
 			}
+
+			/*
+			 * slab_state不为DOWN，则表示kmem_cache_node缓存已创建
+			 * 可直接从kmalloc_caches[0]缓存中分配struct kmem_cache_node对象
+			 */
 			n = kmem_cache_alloc_node(kmalloc_caches,
 							gfpflags, node);
 
@@ -2110,6 +2229,10 @@ static int calculate_sizes(struct kmem_cache *s)
 	 * place the free pointer at word boundaries and this determines
 	 * the possible location of the free pointer.
 	 */
+	/*
+	 * SLUB分配器中每个对象都包含一个用于指向下一个空闲对象的指针
+	 * ALIGN(size, sizeof(void *))保证每个缓存对象占据的空间都能放下指针
+	 */
 	size = ALIGN(size, sizeof(void *));
 
 #ifdef CONFIG_SLUB_DEBUG
@@ -2128,6 +2251,10 @@ static int calculate_sizes(struct kmem_cache *s)
 	 */
 	s->inuse = size;
 
+	/*
+	 * 使用SLAB_POISON特性或者指定ctor初始化对象时，对象内容不因被污染
+	 * 因此对象内部指向下一空闲对象的指针需外置存储，即在对象后划分sizeof(void *)个字节存放
+	 */
 	if (((flags & (SLAB_DESTROY_BY_RCU | SLAB_POISON)) ||
 		s->ctor)) {
 		/*
@@ -2137,6 +2264,9 @@ static int calculate_sizes(struct kmem_cache *s)
 		 *
 		 * This is the case if we do RCU, have a constructor or
 		 * destructor or are poisoning the objects.
+		 */
+		/*
+		 * s->offset记录存放指向下一个空闲对象的偏移位置
 		 */
 		s->offset = size;
 		size += sizeof(void *);
@@ -2174,8 +2304,10 @@ static int calculate_sizes(struct kmem_cache *s)
 	 * each object to conform to the alignment.
 	 */
 	size = ALIGN(size, align);
+	// 单个缓存对象整体占用的内存空间大小，包括：red_zone、free pointer、align等辅助空间
 	s->size = size;
 
+	// 根据单个缓存对象整体占用空间大小计算恰当的SLUB页帧阶数
 	s->order = calculate_order(size);
 	if (s->order < 0)
 		return 0;
@@ -2183,6 +2315,7 @@ static int calculate_sizes(struct kmem_cache *s)
 	/*
 	 * Determine the number of objects per slab
 	 */
+	// objects代表单个SLUB缓存中缓存对象个数
 	s->objects = (PAGE_SIZE << s->order) / size;
 
 	return !!s->objects;
@@ -2197,6 +2330,7 @@ static int kmem_cache_open(struct kmem_cache *s, gfp_t gfpflags,
 	memset(s, 0, kmem_size);
 	s->name = name;
 	s->ctor = ctor;
+	/* 缓存对象数据占用的内存空间大小，不包括：red_zone、free pointer、align等辅助空间 */
 	s->objsize = size;
 	s->align = align;
 	s->flags = kmem_cache_flags(size, flags, name, ctor);
@@ -2204,13 +2338,16 @@ static int kmem_cache_open(struct kmem_cache *s, gfp_t gfpflags,
 	if (!calculate_sizes(s))
 		goto error;
 
+	/* SLUB缓存对象种类数为1，新建缓存暂时不存在复用 */
 	s->refcount = 1;
 #ifdef CONFIG_NUMA
 	s->defrag_ratio = 100;
 #endif
+    /* 初始化struct kmem_cache_node，对于NUMA架构要先分配kmem_cache_node */
 	if (!init_kmem_cache_nodes(s, gfpflags & ~SLUB_DMA))
 		goto error;
 
+	/* 初始化struct kmem_cache_cpu，对于SMP系统要先分配kmem_cache_cpu */
 	if (alloc_kmem_cache_cpus(s, gfpflags & ~SLUB_DMA))
 		return 1;
 	free_kmem_cache_nodes(s);
@@ -2331,7 +2468,10 @@ EXPORT_SYMBOL(kmem_cache_destroy);
 /********************************************************************
  *		Kmalloc subsystem
  *******************************************************************/
-
+/*
+ * SLUB分配器的通用缓存
+ * PAGE_SHIFT为12，则表示存在12个通用缓存
+ */
 struct kmem_cache kmalloc_caches[PAGE_SHIFT] __cacheline_aligned;
 EXPORT_SYMBOL(kmalloc_caches);
 
@@ -2797,7 +2937,9 @@ static int slab_memory_callback(struct notifier_block *self,
 /********************************************************************
  *			Basic setup of slabs
  *******************************************************************/
-
+/*
+ * 初始化slub高速缓存，主要用于初始化kmem_cache_node缓存和kmalloc缓存
+ */
 void __init kmem_cache_init(void)
 {
 	int i;
@@ -2811,6 +2953,7 @@ void __init kmem_cache_init(void)
 	 * struct kmem_cache_node's. There is special bootstrap code in
 	 * kmem_cache_open for slab_state == DOWN.
 	 */
+	/* 创建kmalloc_caches的第0个缓存用来存储struct kmem_cache_node */
 	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
 		sizeof(struct kmem_cache_node), GFP_KERNEL);
 	kmalloc_caches[0].refcount = -1;
@@ -2823,17 +2966,20 @@ void __init kmem_cache_init(void)
 	slab_state = PARTIAL;
 
 	/* Caches that are not of the two-to-the-power-of size */
+	/* 如果kmalloc的最小对象大小不大于64则创建第1个缓存，对象大小为96字节 */
 	if (KMALLOC_MIN_SIZE <= 64) {
 		create_kmalloc_cache(&kmalloc_caches[1],
 				"kmalloc-96", 96, GFP_KERNEL);
 		caches++;
 	}
+	/* 如果kmalloc的最小对象大小不大于128则创建第2个缓存，对象大小为192字节 */
 	if (KMALLOC_MIN_SIZE <= 128) {
 		create_kmalloc_cache(&kmalloc_caches[2],
 				"kmalloc-192", 192, GFP_KERNEL);
 		caches++;
 	}
 
+	/* 创建后续的通用缓存 */
 	for (i = KMALLOC_SHIFT_LOW; i < PAGE_SHIFT; i++) {
 		create_kmalloc_cache(&kmalloc_caches[i],
 			"kmalloc", 1 << i, GFP_KERNEL);
@@ -2858,6 +3004,7 @@ void __init kmem_cache_init(void)
 	for (i = 8; i < KMALLOC_MIN_SIZE; i += 8)
 		size_index[(i - 1) / 8] = KMALLOC_SHIFT_LOW;
 
+	/* 更新SLUB分配器的初始化进度 */
 	slab_state = UP;
 
 	/* Provide the correct kmalloc names now that the caches are up */
@@ -2907,33 +3054,53 @@ static struct kmem_cache *find_mergeable(size_t size,
 {
 	struct kmem_cache *s;
 
+	/*
+	 * slub_nomerge被设置，则SLUB缓存全部都不复用
+	 * SLUB_NEVER_MERGE标志位被设置，则当前创建的缓存不与其他缓存复用
+	 */
 	if (slub_nomerge || (flags & SLUB_NEVER_MERGE))
 		return NULL;
 
+	/*
+	 * ctor对象初始化函数为指定，则表明对象初始内存存在差异，不因复用缓存
+	 */
 	if (ctor)
 		return NULL;
 
+	/*
+	 * 缓存可复用，则表明SLAB_RED_ZONE | SLAB_POISON | SLAB_STORE_USER | \
+	 *	SLAB_TRACE | SLAB_DESTROY_BY_RCU等特性均未被开启
+	 * 因此缓存对象size只需考虑free pointer和align即可
+	 */
 	size = ALIGN(size, sizeof(void *));
 	align = calculate_alignment(flags, align, size);
 	size = ALIGN(size, align);
 	flags = kmem_cache_flags(size, flags, name, NULL);
 
+	/* 遍历slab_caches缓存链表 */
 	list_for_each_entry(s, &slab_caches, list) {
+		/* 不允许复用，则跳过 */
 		if (slab_unmergeable(s))
 			continue;
 
+		/* 缓存对象占用内存空间小于要求的size，则跳过 */
 		if (size > s->size)
 			continue;
 
+		/* 相关标识不一致，则跳过 */
 		if ((flags & SLUB_MERGE_SAME) != (s->flags & SLUB_MERGE_SAME))
 				continue;
 		/*
 		 * Check if alignment is compatible.
 		 * Courtesy of Adrian Drzewiecki
 		 */
+		/*
+		 * 检查字节对齐是否兼容，即可复用缓存的对象大小也可看成按照align对齐
+		 */
 		if ((s->size & ~(align -1)) != s->size)
 			continue;
 
+		/* 缓存对象占用内存空间大小比指定的size多出1个字长以上，则跳过，避免过多空间浪费 */
 		if (s->size - size >= sizeof(void *))
 			continue;
 
@@ -2949,20 +3116,32 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
 	struct kmem_cache *s;
 
 	down_write(&slub_lock);
+	/*
+	 * 先试图从已有的缓存中找到一个可以满足要求的进行复用，这样就不用创建新的缓存
+	 */
 	s = find_mergeable(size, align, flags, name, ctor);
 	if (s) {
 		int cpu;
 
+		/*
+		 * 缓存的引用计数加1，表示缓存中多了一种对象
+		 */
 		s->refcount++;
 		/*
 		 * Adjust the object sizes so that we clear
 		 * the complete object on kzalloc.
+		 */
+		/*
+		 * 在新对象大小和原有对象大小中取较大者作为缓存的对象大小
 		 */
 		s->objsize = max(s->objsize, (int)size);
 
 		/*
 		 * And then we need to update the object size in the
 		 * per cpu structures
+		 */
+		/*
+		 * 更新每CPU结构中的对象大小值
 		 */
 		for_each_online_cpu(cpu)
 			get_cpu_slab(s, cpu)->objsize = s->objsize;
@@ -2972,10 +3151,16 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
 			goto err;
 		return s;
 	}
+
+	/*
+	 * 未找到可复用缓存，则新建一个SLUB缓存
+	 * kmem_cache对象不再从cache_cache特定高速缓存分配，而是通过kmalloc从通用高速缓存分配
+	 */
 	s = kmalloc(kmem_size, GFP_KERNEL);
 	if (s) {
 		if (kmem_cache_open(s, GFP_KERNEL, name,
 				size, align, flags, ctor)) {
+			// 将新建的kmem_cache高速缓存链接到slab_caches全局链表
 			list_add(&s->list, &slab_caches);
 			up_write(&slub_lock);
 			if (sysfs_slab_add(s))

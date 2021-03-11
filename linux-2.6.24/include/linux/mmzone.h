@@ -318,8 +318,19 @@ struct zone {
 	ZONE_PADDING(_pad1_)
 
 	/* Fields commonly accessed by the page reclaim scanner */
-	spinlock_t		lru_lock;	
+	spinlock_t		lru_lock;
+	/*
+	 * 内存回收的核心思想，就是将一些数据写到磁盘中，将这些数据占用的内存页释放给予系统使用
+	 * 主要回收动态分配给进程使用的页框，根据是否存在文件映射，进程页框分为两类，一类为文件页(代码段)、一类为匿名页(栈堆段)
+	 *
+	 * 内核采用最近最少使用LRU的策略对文件页和匿名页中“较短时间可能不会被频繁使用”的页面进行回收
+	 * LRU的实现主要基于一对双向链表：active链表和inactive链表，前者表示活跃状态的页面，后者表示非活跃状态的页面
+	 * 内核会依据页面的活跃状态将页面在两个双向列表中移动，当页面由活跃变不活跃时，从active链表移动到inactive链表
+	 * 内核回收内存时，从inactive链表尾部开始进行(具体参考kswapd回收算法)
+	 */
+	/* 内存管理区中处于活跃状态的页面链表 */
 	struct list_head	active_list;
+	/* 内存管理区中处于不活跃状态的页面链表 */
 	struct list_head	inactive_list;
 	unsigned long		nr_scan_active;
 	unsigned long		nr_scan_inactive;

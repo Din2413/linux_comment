@@ -571,6 +571,13 @@ struct kmem_cache {
  * cachep->buffer_size - 1* BYTES_PER_WORD: last caller address
  *					[BYTES_PER_WORD long]
  */
+/*
+ * slab对象布局如下：
+ *      ULL                          ULL              BYTES_PER_WORD
+ * ------------------------------------------------------------
+ * | red_zone1 |     slab obj    | red_zone2 | align | caller |
+ * ------------------------------------------------------------
+ */
 static int obj_offset(struct kmem_cache *cachep)
 {
 	return cachep->obj_offset;
@@ -1469,7 +1476,7 @@ static void init_list(struct kmem_cache *cachep, struct kmem_list3 *list,
  * Initialisation.  Called after the page allocator have been initialised and
  * before smp_init().
  */
-/* 初始化高速缓存 */
+/* 初始化slab高速缓存 */
 void __init kmem_cache_init(void)
 {
 	size_t left_over;
@@ -2759,11 +2766,15 @@ static void cache_init_objs(struct kmem_cache *cachep,
 		void *objp = index_to_obj(cachep, slabp, i);
 #if DEBUG
 		/* need to poison the objs? */
+		/* 空闲对象空间填充为6b6b...6ba5 */
 		if (cachep->flags & SLAB_POISON)
 			poison_obj(cachep, objp, POISON_FREE);
+
+		/* 对象还未被请求分配，“所有者”地址为NULL */
 		if (cachep->flags & SLAB_STORE_USER)
 			*dbg_userword(cachep, objp) = NULL;
 
+		/* red_zone存在两个区域，对象还未被分配时，值为RED_INACTIVE */
 		if (cachep->flags & SLAB_RED_ZONE) {
 			*dbg_redzone1(cachep, objp) = RED_INACTIVE;
 			*dbg_redzone2(cachep, objp) = RED_INACTIVE;
@@ -3625,8 +3636,10 @@ __cache_alloc(struct kmem_cache *cachep, gfp_t flags, void *caller)
 
 	cache_alloc_debugcheck_before(cachep, flags);
 	local_irq_save(save_flags);
+	/* 分配slab空闲对象，优先从CPU缓存数组中分配，不满足时从slab缓存分配，极端情况从伙伴系统补充slab缓存 */
 	objp = __do_cache_alloc(cachep, flags);
 	local_irq_restore(save_flags);
+	/* 检查分配的slab对象，DEBUG开启时才有效，否则为空 */
 	objp = cache_alloc_debugcheck_after(cachep, flags, objp, caller);
 	prefetchw(objp);
 

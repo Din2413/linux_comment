@@ -52,9 +52,19 @@ struct scan_control {
 	/* This context's GFP mask */
 	gfp_t gfp_mask;
 
+	/*
+	 * 是否能够进行将页回写到磁盘的操作，这个值会影响脏的文件页与匿名页lru链表中的页的回收
+	 * 如果不能进行回写操作，脏页和匿名页lru链表中的页都不能进行回收
+	 */
 	int may_writepage;
 
 	/* Can pages be swapped as part of reclaim? */
+	/*
+	 * 能否进行swap交换，同样影响匿名页lru链表中的页的回收
+	 * 如果不能进行swap交换，就不会对匿名页lru链表进行扫描
+	 * 也就是在本次内存回收中，完全不会回收匿名页lru链表中的页
+	 * (进程堆、栈、shmem共享内存、匿名mmap共享内存使用的页)
+	 */
 	int may_swap;
 
 	/* This context's SWAP_CLUSTER_MAX. If freeing memory for
@@ -102,6 +112,13 @@ struct scan_control {
 
 /*
  * From 0 .. 100.  Higher means more swappy.
+ */
+/*
+ * 内存回收是anonymous pages和file pages的比重，值越大，回收越优先选择anonymous pages
+ * anonymous pages指磁盘中不存在文件映射的内存，如栈、堆等，回收时，需要先将页写入swap空间
+ * files pages指磁盘中存在文件映射的内存，如文件缓存，回收时，根据脏页属性，决定是否需要writeback写回，对于非脏页，可直接回收
+ * anonymous pages回收一定涉及IO操作，而file pages因定期write back机制涉及IO操作的概率较小
+ * 因此，内存回收时，通常更倾向于换出file pages页面
  */
 int vm_swappiness = 60;
 long vm_total_pages;	/* The total number of pages which the VM controls */
@@ -1100,6 +1117,16 @@ force_reclaim_mapped:
 /*
  * This is a basic per-zone page freer.  Used by both kswapd and direct reclaim.
  */
+/*
+ * 回收管理区LRU链表中可回收的内存页框
+ * 1、将LRU active_list中的非活跃页框移到inactive_list；
+ * 2、对inactive_list可回收的页框进行回收处理；
+ *
+ * 三个调用路径：
+ * 1、低水位分配失败异步回收：kswapd->balance_pgdat->shrink_zone
+ * 2、zone水位线检测失败时依据zone_reclaim_mode决定是否立即对zone回收：zone_reclaim->__zone_reclaim->shrink_zone
+ * 3、最小水位线分配失败同步回收：try_to_free_pages->shrink_zones->shrink_zone
+ */
 static unsigned long shrink_zone(int priority, struct zone *zone,
 				struct scan_control *sc)
 {
@@ -1344,6 +1371,11 @@ loop_again:
 	for (i = 0; i < pgdat->nr_zones; i++)
 		temp_priority[i] = DEF_PRIORITY;
 
+	/*
+	 * 扫描优先级，代表一次扫描(total_size >> priority)个页框
+	 * 优先级越低，一次扫描的页框数量就越多
+	 * 优先级越高，一次扫描的数量就越少
+	 */
 	for (priority = DEF_PRIORITY; priority >= 0; priority--) {
 		int end_zone = 0;	/* Inclusive.  0 = ZONE_DMA */
 		unsigned long lru_pages = 0;

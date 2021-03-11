@@ -12,16 +12,26 @@
 #include <linux/kobject.h>
 
 struct kmem_cache_cpu {
+	/* freelist总是指向下一个空闲对象 */
 	void **freelist;
 	struct page *page;
 	int node;
+	/*
+	 * kmem_cache->offset记录指向下一空闲对象的指针所偏移的字节长度
+	 * 当开启POISON或ctor指定时，指针存在放objsize之外，否则存放再objsize之内，偏移长度为0
+	 *
+	 * offset取值为(kmem_cache->offset / sizeof(void *))，即表示"以字长为单元"单元数
+	 * freelist为(void **)类型，因此freelist[offset]刚好得到下一空闲对象的地址
+	 */
 	unsigned int offset;
 	unsigned int objsize;
 };
 
 struct kmem_cache_node {
 	spinlock_t list_lock;	/* Protect partial list and nr_partial */
+	/* partial slab链表中可用slab数量 */
 	unsigned long nr_partial;
+	/* 已分配且未回收的slab数量 */
 	atomic_long_t nr_slabs;
 	struct list_head partial;
 #ifdef CONFIG_SLUB_DEBUG
@@ -35,8 +45,11 @@ struct kmem_cache_node {
 struct kmem_cache {
 	/* Used for retriving partial slabs etc */
 	unsigned long flags;
+	/* 包含red_zone、free_pointer等元数据的对象大小 */
 	int size;		/* The size of an object including meta data */
+	/* 对象的实际大小 */
 	int objsize;		/* The size of an object without meta data */
+	/* 空闲对象指针的偏移 */
 	int offset;		/* Free pointer offset. */
 	int order;
 
@@ -44,12 +57,15 @@ struct kmem_cache {
 	 * Avoid an extra cache line for UP, SMP and for the node local to
 	 * struct kmem_cache.
 	 */
+	/* 本地结点的slab信息 */
 	struct kmem_cache_node local_node;
 
 	/* Allocation and freeing of slabs */
 	int objects;		/* Number of objects in slab */
+	/* 缓存中存在的对象种类数目，因为slub允许缓存复用，因此一个缓存中可能存在多种对象类型 */
 	int refcount;		/* Refcount for slab cache destroy */
 	void (*ctor)(struct kmem_cache *, void *);
+	/* 包括对象实际大小、word对齐大小 */
 	int inuse;		/* Offset to metadata */
 	int align;		/* Alignment */
 	const char *name;	/* Name (only for display!) */

@@ -1,5 +1,7 @@
 /*
  * SLOB Allocator: Simple List Of Blocks
+ * 传统K&R风格堆分配器，比SLAB分配器更简单，且更有效率。
+ * 但比SLAB分配器更容易产生内存碎片，仅应用于小系统，特别是嵌入式系统。
  *
  * Matt Mackall <mpm@selenic.com> 12/30/03
  *
@@ -68,6 +70,7 @@
  * Those with larger size contain their size in the first SLOB_UNIT of
  * memory, and the offset of the next free block in the second SLOB_UNIT.
  */
+/* slob缓存基于单元管理，单元大小根据PAGE_SIZE的不同而不同，通常情况为2字节 */
 #if PAGE_SIZE <= (32767 * 2)
 typedef s16 slobidx_t;
 #else
@@ -89,9 +92,12 @@ struct slob_page {
 		struct {
 			unsigned long flags;	/* mandatory */
 			atomic_t _count;	/* mandatory */
+			/* slob缓存内空闲单元数 */
 			slobidx_t units;	/* free units left in page */
 			unsigned long pad[2];
+			/* slob缓存首个空闲内存块地址 */
 			slob_t *free;		/* first free slob_t in page */
+			/* 链接空闲slob缓存 */
 			struct list_head list;	/* linked list of free pages */
 		};
 		struct page page;
@@ -174,14 +180,20 @@ static DEFINE_SPINLOCK(slob_lock);
 /*
  * Encode the given size and next info into a free slob block s.
  */
+/*
+ * 一个slob中可以有多种大小不同的块，对于任何一个快来说都必须拥有自己的管理数据
+ * 在slob中，空闲块总是按地址顺序链式连接的
+ */
 static void set_slob(slob_t *s, slobidx_t size, slob_t *next)
 {
 	slob_t *base = (slob_t *)((unsigned long)s & PAGE_MASK);
 	slobidx_t offset = next - base;
 
+	/* 对于占用单元数大于1的空闲块，第一个单元保存块的大小，第二个块保存下一个空闲块的偏移 */
 	if (size > 1) {
 		s[0].units = size;
 		s[1].units = offset;
+	/* 对于只占用一个单元的空闲块，该单元保存下一个空闲对象偏移的相反数 */
 	} else
 		s[0].units = -offset;
 }
@@ -219,6 +231,7 @@ static int slob_last(slob_t *s)
 	return !((unsigned long)slob_next(s) & ~PAGE_MASK);
 }
 
+/* 当通过SLOB分配超过一页大小的对象时，直接从伙伴系统分配阶为order的连续页 */
 static void *slob_new_page(gfp_t gfp, int order, int node)
 {
 	void *page;
@@ -244,16 +257,24 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 	slob_t *prev, *cur, *aligned = 0;
 	int delta = 0, units = SLOB_UNITS(size);
 
+	/* 遍历slob缓存内的空闲内存块 */
 	for (prev = NULL, cur = sp->free; ; prev = cur, cur = slob_next(cur)) {
+		/* 获取当前空闲内存块的单元数 */
 		slobidx_t avail = slob_units(cur);
 
 		if (align) {
 			aligned = (slob_t *)ALIGN((unsigned long)cur, align);
 			delta = aligned - cur;
 		}
+		/* 若当前空闲内存块按align地址对齐后剩余的空闲单元数依旧能满足分配 */
 		if (avail >= units + delta) { /* room enough? */
 			slob_t *next;
 
+			/*
+			 * 若空闲块地址对齐后，首地址产生偏移，则将空闲块划分成两块
+			 * 一块范围为[cur,aligned)，offset未aligned
+			 * 另一块范围为[aligned,avail - delta + 1]，offset为next
+			 */
 			if (delta) { /* need to fragment head to align? */
 				next = slob_next(cur);
 				set_slob(aligned, avail - delta, next);
@@ -264,11 +285,15 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 			}
 
 			next = slob_next(cur);
+			/* 若空闲内存块刚好满足分配时，将该空闲内存块从空闲链表中直接剔除用于分配 */
 			if (avail == units) { /* exact fit? unlink. */
+				/* 满足分配的空闲内存块前还存在其他空闲内存块 */
 				if (prev)
 					set_slob(prev, slob_units(prev), next);
+				/* 满足分配的空闲内存块前没有其他空闲内存块，将sp->free直接指向next */
 				else
 					sp->free = next;
+			/* 若空闲内存块满足分配后，还有空闲单元剩余，则将满足分配后的剩余单元重新划成一个空闲内存块 */
 			} else { /* fragment */
 				if (prev)
 					set_slob(prev, slob_units(prev), cur + units);
@@ -277,7 +302,12 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 				set_slob(cur + units, avail - units, next);
 			}
 
+			/* 更新slob缓存剩余空闲单元数 */
 			sp->units -= units;
+			/*
+			 * 当slob缓存空闲单元数为0时，将slob缓存从空闲slob链表移除
+			 * 后续当该slob缓存的对象被释放时，会重新将该slob缓存插入空闲slob链表
+			 */
 			if (!sp->units)
 				clear_slob_page_free(sp);
 			return cur;
@@ -299,21 +329,25 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 
 	spin_lock_irqsave(&slob_lock, flags);
 	/* Iterate through each partially free page, try to find room */
+	/* 遍历所有存在空闲单元的slob缓存 */
 	list_for_each_entry(sp, &free_slob_pages, list) {
 #ifdef CONFIG_NUMA
 		/*
 		 * If there's a node specification, search for a partial
 		 * page with a matching node id in the freelist.
 		 */
+		/* NUMA开启时，用于对象分配的slob缓存所属节点必须与请求节点一致 */
 		if (node != -1 && page_to_nid(&sp->page) != node)
 			continue;
 #endif
 		/* Enough room on this page? */
+		/* slob缓存内可用单元数小于对象实际所需单元数，不满足分配 */
 		if (sp->units < SLOB_UNITS(size))
 			continue;
 
 		/* Attempt to alloc */
 		prev = sp->list.prev;
+		/* 从slob缓存中分配对象 */
 		b = slob_page_alloc(sp, size, align);
 		if (!b)
 			continue;
@@ -329,19 +363,31 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 	spin_unlock_irqrestore(&slob_lock, flags);
 
 	/* Not enough space: must allocate a new page */
+	/* 当所有空闲slob缓存均不满足分配时，则从伙伴系统中分配单页补充slob缓存 */
 	if (!b) {
 		b = slob_new_page(gfp & ~__GFP_ZERO, 0, node);
 		if (!b)
 			return 0;
+		/*
+		 * Slob分配器将描述slob的变量打包成一个结构
+		 * 然后和页描述符struct page一起组成一个联合体
+		 * 这样就可以直接利用页描述符已占有的空间
+		 * 将页描述符中无关紧要的字段填充为slob的有效描述字段
+		 */
 		sp = (struct slob_page *)virt_to_page(b);
 		set_slob_page(sp);
 
 		spin_lock_irqsave(&slob_lock, flags);
+		/* slob缓存初始分配后可用单元数 */
 		sp->units = SLOB_UNITS(PAGE_SIZE);
+		/* sp->free指向slob中首个空闲块，初始分配时指向slob页首地址 */
 		sp->free = b;
 		INIT_LIST_HEAD(&sp->list);
+		/* slob缓存初始分配后，只包含一个大小为SLOB_UNITS(PAGE_SIZE)的空闲块 */
 		set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
+		/* 将分配的slob缓存连接到全局空闲slob链表free_slob_pages */
 		set_slob_page_free(sp);
+		/* 从刚分配的slob缓存分配大小为size的空闲块，用于满足对象分配 */
 		b = slob_page_alloc(sp, size, align);
 		BUG_ON(!b);
 		spin_unlock_irqrestore(&slob_lock, flags);
@@ -497,6 +543,14 @@ size_t ksize(const void *block)
 }
 EXPORT_SYMBOL(ksize);
 
+/*
+ * slab缓存结构描述符
+ *
+ * 1、slob分配器并不像slab分配器那样，为kmem_cache创建对象cpu缓存和结点slab链表
+ *   而是将所有的slob缓存统一在一个通用链表中维护；
+ * 2、slob分配器并不像slab分配器那样，不同大小的对象在不同的slab缓存中分配
+ *   而是在分配对象时，直接从通用链表中首个满足分配的空闲slob缓存分配内存块；
+ */
 struct kmem_cache {
 	unsigned int size, align;
 	unsigned long flags;
@@ -546,6 +600,10 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
 
 	if (c->size < PAGE_SIZE)
 		b = slob_alloc(c->size, flags, c->align, node);
+	/*
+	 * 因单个slob缓存永远占用一个页框大小
+	 * 所以若通过slob分配大小大于一页的对象，则直接调用伙伴系统分配连续页
+	 */
 	else
 		b = slob_new_page(flags, get_order(c->size), node);
 
