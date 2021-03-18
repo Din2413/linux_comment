@@ -467,12 +467,14 @@ __insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
 	mm->map_count++;
 }
 
+/* 从线性区链表和红-黑树中删除一个线性区 */
 static inline void
 __vma_unlink(struct mm_struct *mm, struct vm_area_struct *vma,
 		struct vm_area_struct *prev)
 {
 	prev->vm_next = vma->vm_next;
 	rb_erase(&vma->vm_rb, &mm->mm_rb);
+	/* 如果mmap_cache(存放最近被引用的线性区)字段指向被删除的线性区，则对其进行更新 */
 	if (mm->mmap_cache == vma)
 		mm->mmap_cache = prev;
 }
@@ -1230,6 +1232,9 @@ unacct_error:
  *
  * This function "knows" that -ENOMEM has the bits set.
  */
+/*
+ * 从进程地址空间自底向上地查找一个可用的线性区
+ */
 #ifndef HAVE_ARCH_UNMAPPED_AREA
 unsigned long
 arch_get_unmapped_area(struct file *filp, unsigned long addr,
@@ -1245,6 +1250,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	if (flags & MAP_FIXED)
 		return addr;
 
+	/* addr不为0，则指定必须从哪个地址开始查找 */
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma(mm, addr);
@@ -1404,6 +1410,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
 		mm->free_area_cache = mm->mmap_base;
 }
 
+/*
+ * 搜查进程地址空间以找到一个可以使用的线性地址区间
+ * len指定区间的长度，非空的addr指定必须从哪个地址开始进行查找
+ */
 unsigned long
 get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 		unsigned long pgoff, unsigned long flags)
@@ -1411,6 +1421,17 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 	unsigned long (*get_area)(struct file *, unsigned long,
 				  unsigned long, unsigned long, unsigned long);
 
+	/*
+	 * 进程地址空间默认布局中，堆紧接着text段向上扩展，而栈起始于STACK_TOP向下扩展，内存映射区处于两者之前，
+	 * 起始位置由mm_struct->mmap_base指定，通常设置为TASK_UNMAPPED_BASE，其值大多为TASK_SIZE/3，且自底向上扩展
+	 * 
+	 * 对于32位体系结构，默认布局的堆实际可用空间被限制在1GB以内，如果堆增长到顶部后需继续扩展就会覆盖到内存映射区，
+	 * 为改善此问题，内核引入了一种新的进程地址空间布局，mmap_base改为限制栈的大小，整个内存映射区由自下而上扩展改为自上而下扩展，优先保证堆和map区可扩展区间充足
+	 * 但这种布局下，栈的地址空间又被限制，因此使用哪种地址空间布局还需根据实际情况确定
+	 *
+	 * 第一种布局，内存映射区自下而上扩展，使用arch_get_unmapped_area()获取可用的线性区
+	 * 第二种布局，内存映射区自上而下扩展，使用arch_get_unmapped_area_topdown()获取可用的线性区
+	 */
 	get_area = current->mm->get_unmapped_area;
 	if (file && file->f_op && file->f_op->get_unmapped_area)
 		get_area = file->f_op->get_unmapped_area;
@@ -2058,6 +2079,7 @@ void exit_mmap(struct mm_struct *mm)
  * and into the inode's i_mmap tree.  If vm_file is non-NULL
  * then i_mmap_lock is taken here.
  */
+/* 在线性区链表和红-黑树中插入一个线性区 */
 int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
 {
 	struct vm_area_struct * __vma, * prev;

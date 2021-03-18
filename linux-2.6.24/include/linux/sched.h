@@ -970,6 +970,13 @@ struct task_struct {
 	struct list_head ptrace_children;
 	struct list_head ptrace_list;
 
+	/*
+	 * 1、内核进程仅运行在内核态，它们永远不会访问用户空间的线性地址，
+	 * 因此，内核进程不拥有进程线性地址空间，即mm字段为NULL；
+	 * 2、但为了避免无用的TLB和高速缓存刷新（进程切换导致），内核进程
+	 * 使用一组最近运行的用户态进程的页面，即内核进程得以运行时，它的active_mm
+	 * 字段被初始化为前一个运行进程的mm值（进程调度schedule()函数实现）；
+	 */
 	struct mm_struct *mm, *active_mm;
 
 /* task state */
@@ -1915,6 +1922,15 @@ static inline void set_task_cpu(struct task_struct *p, unsigned int cpu)
 
 #endif /* CONFIG_SMP */
 
+/*
+ * 进程地址空间存在两种布局
+ * ①堆紧跟text段自下而上扩展，栈起始于STACK_TOP自上而下扩展，内存映射区起始于mm_struct->mmap_base自下而上扩展
+ * ②堆紧跟text段自下而上扩展，栈起始于STACK_TOP自上而下扩展，内存映射区起始于mm_struct->mmap_base自上而下扩展
+ *
+ * 第一种堆空间被限制，第二种栈空间被限制，内核需调用arch_pick_mmap_layout进行选择
+ * HAVE_ARCH_PICK_MMAP_LAYOUT宏表示特定体系结构是否实现特定的arch_pick_mmap_layout函数进行布局选择
+ * 默认情况下，即宏未被定义，则采用默认的地址空间布局(第一种)
+ */
 #ifdef HAVE_ARCH_PICK_MMAP_LAYOUT
 extern void arch_pick_mmap_layout(struct mm_struct *mm);
 #else

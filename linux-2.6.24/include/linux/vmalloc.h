@@ -7,8 +7,11 @@
 struct vm_area_struct;
 
 /* bits in vm_struct->flags */
+/* 使用ioremap()映射的硬件设备的板上内存 */
 #define VM_IOREMAP	0x00000001	/* ioremap() and friends */
+/* 使用vmalloc()获取的页 */
 #define VM_ALLOC	0x00000002	/* vmalloc() */
+/* 使用vmaps()映射的已经被分配的页 */
 #define VM_MAP		0x00000004	/* vmap()ed pages */
 #define VM_USERMAP	0x00000008	/* suitable for remap_vmalloc_range */
 #define VM_VPAGES	0x00000010	/* buffer for pages was vmalloc'ed */

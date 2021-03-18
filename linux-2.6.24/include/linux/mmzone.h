@@ -633,10 +633,10 @@ typedef struct pglist_data {
 	 * 其实可通过其他多端结点分配，因此引入zonelists概念将远端内存结点和本地内存结点统一挂在zonelist链表上
 	 *
 	 * NUMA中，MAX_ZONELISTS值为2*MAX_NR_ZONES，node_zonelists由两部分组成
-	 * 前半部分[0~MAX_NR_ZONES-1]只包含各个远端结点管理区列表，当自身管理区不满足分配时可从备选列表尝试分配
+	 * 前半部分[0~MAX_NR_ZONES-1]包含所有内存结点管理区列表，当自身管理区不满足分配时可从备选列表尝试分配
 	 * 后半部分[MAX_NR_ZONES~MAX_ZONELISTS]只包含自身结点管理区列表
 	 *
-	 * UMA中，MAX_ZONELISTS值则为MAX_NR_ZONES，node_zonelists只包含自身结点管理区
+	 * UMA中，只存在一个内存结点，node_zonelists前后部分均只包含自身结点管理区列表
 	 */
 	struct zonelist node_zonelists[MAX_ZONELISTS];
 	/* 该结点划分的管理区个数 */

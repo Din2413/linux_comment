@@ -97,18 +97,32 @@ struct page {
  * space that has a special rule for the page-fault handlers (ie a shared
  * library, the executable area etc).
  */
+/* 进程线性地址区描述符 */
 struct vm_area_struct {
+	/* 指向线性地址区所在的内存描述符 */
 	struct mm_struct * vm_mm;	/* The address space we belong to. */
+	/* 线性地址区内的第一个线性地址 */
 	unsigned long vm_start;		/* Our start address within vm_mm. */
+	/* 线性地址区之后的第一个线性地址 */
 	unsigned long vm_end;		/* The first byte after our end address
 					   within vm_mm. */
 
 	/* linked list of VM areas per task, sorted by address */
+	/* 指向进程线性地址空间的下一个线性地址区
+	 * 进程所拥有的所有线性区是按内存地址的升序排列，并通过一个简单的链表链接在一起的
+	 */
 	struct vm_area_struct *vm_next;
 
+	/* 线性地址区中页框的访问权限 */
 	pgprot_t vm_page_prot;		/* Access permissions of this VMA. */
 	unsigned long vm_flags;		/* Flags, listed below. */
 
+	/*
+	 * 红-黑树节点，链接进程线性地址区组成的红-黑树
+	 * 当进程的线性区数量较多时，从简单链表中查找包含指定线性地址的线性区将比较耗时，链表管理相当低效
+	 * 因此，维护简单链表的同时，内核也将线性地址区存放在红-黑树中，通过红-黑树查找特定线性区非常高效，
+	 * 而链表通常用在扫描整个线性地址区集合时
+	 */
 	struct rb_node vm_rb;
 
 	/*
@@ -154,10 +168,15 @@ struct vm_area_struct {
 #endif
 };
 
+/* 包含与进程地址空间有关的全部信息的内存描述符 */
 struct mm_struct {
+	/* 指向进程线性地址区对象的链表头 */
 	struct vm_area_struct * mmap;		/* list of VMAs */
+	/* 指向进程线性地址区对象的红-黑树的根节点 */
 	struct rb_root mm_rb;
+	/* 指向最后一个引用的进程线性地址区对象 */
 	struct vm_area_struct * mmap_cache;	/* last find_vma result */
+	/* 在进程地址空间中搜索有效线性地址区间的方法 */
 	unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
 				unsigned long pgoff, unsigned long flags);
@@ -166,13 +185,17 @@ struct mm_struct {
 	unsigned long task_size;		/* size of task vm space */
 	unsigned long cached_hole_size; 	/* if non-zero, the largest hole below free_area_cache */
 	unsigned long free_area_cache;		/* first hole of size cached_hole_size or larger */
+	/* 指向页全局目录 */
 	pgd_t * pgd;
+	/* 存放共享mm_struc的轻量级进程的个数 */
 	atomic_t mm_users;			/* How many users with user space? */
 	atomic_t mm_count;			/* How many references to "struct mm_struct" (users count as 1) */
+	/* 进程线性地址区的个数 */
 	int map_count;				/* number of VMAs */
 	struct rw_semaphore mmap_sem;
 	spinlock_t page_table_lock;		/* Protects page tables and some counters */
 
+	/* 所有内存描述符存放在一个双向链表中，链表中的第一个元素是init_mm的mm_list字段 */
 	struct list_head mmlist;		/* List of maybe swapped mm's.	These are globally strung
 						 * together off init_mm.mmlist, and are protected
 						 * by mmlist_lock
@@ -187,10 +210,37 @@ struct mm_struct {
 	unsigned long hiwater_rss;	/* High-watermark of RSS usage */
 	unsigned long hiwater_vm;	/* High-water virtual memory usage */
 
+	/*
+	 * total_vm：进程地址空间的页数
+	 * locked_vm：“锁住”不能换出的页数
+	 * shared_vm：共享文件内存映射的页数
+	 * exec_vm：可执行内存映射的页数
+	 */
 	unsigned long total_vm, locked_vm, shared_vm, exec_vm;
+	/*
+	 * stack_vm：用户态堆栈的页数
+	 * reserved_vm：在保留区中的页数或在特殊线性区中的页数
+	 */
 	unsigned long stack_vm, reserved_vm, def_flags, nr_ptes;
+	/*
+	 * start_code：可执行代码的起始线性地址
+	 * end_code：可执行代码的结束线性地址
+	 * start_data：已初始化数据的起始线性地址
+	 * end_data：已初始化数据的结束线性地址
+	 */
 	unsigned long start_code, end_code, start_data, end_data;
+	/*
+	 * start_brk：堆的起始线性地址
+	 * brk：堆当前的末尾线性地址
+	 * start_stack：堆栈的起始线性地址
+	 */
 	unsigned long start_brk, brk, start_stack;
+	/*
+	 * arg_start：命令行参数的起始线性地址
+	 * arg_end：命令行参数的结束线性地址
+	 * env_start：环境变量的起始线性地址
+	 * env_end：环境变量的结束线性地址
+	 */
 	unsigned long arg_start, arg_end, env_start, env_end;
 
 	unsigned long saved_auxv[AT_VECTOR_SIZE]; /* for /proc/PID/auxv */

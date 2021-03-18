@@ -255,6 +255,7 @@ EXPORT_SYMBOL_GPL(__get_vm_area);
  *	and reserved it for out purposes.  Returns the area descriptor
  *	on success or %NULL on failure.
  */
+/* 在线性地址VMALLOC_START和VMALLOC_END之间查找一个空闲区域 */
 struct vm_struct *get_vm_area(unsigned long size, unsigned long flags)
 {
 	return __get_vm_area(size, flags, VMALLOC_START, VMALLOC_END);

@@ -71,9 +71,13 @@ extern unsigned int kobjsize(const void *objp);
 /*
  * vm_flags..
  */
+/* 线性区的页可读 */
 #define VM_READ		0x00000001	/* currently active flags */
+/* 线性区的页可写 */
 #define VM_WRITE	0x00000002
+/* 线性区的页可执行 */
 #define VM_EXEC		0x00000004
+/* 线性区的页可被进程共享 */
 #define VM_SHARED	0x00000008
 
 /* mprotect() hardcodes VM_MAYREAD >> 4 == VM_READ, and so for r/w/x bits. */
@@ -82,19 +86,27 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_MAYEXEC	0x00000040
 #define VM_MAYSHARE	0x00000080
 
+/* 线性区向低地址扩展 */
 #define VM_GROWSDOWN	0x00000100	/* general info on the segment */
+/* 线性区向高地址扩展 */
 #define VM_GROWSUP	0x00000200
 #define VM_PFNMAP	0x00000400	/* Page-ranges managed without "struct page", just pure PFN */
+/* 线性区映射一个不能打开用于写的文件 */
 #define VM_DENYWRITE	0x00000800	/* ETXTBSY on write attempts.. */
-
+/* 线性区映射一个可执行文件 */
 #define VM_EXECUTABLE	0x00001000
+/* 线性区的页被锁住，且不能换出 */
 #define VM_LOCKED	0x00002000
+/* 线性区映射设备的I/O地址空间 */
 #define VM_IO           0x00004000	/* Memory mapped I/O or similar */
 
 					/* Used by sys_madvise() */
+/* 应用程序顺序地访问线性区的页 */
 #define VM_SEQ_READ	0x00008000	/* App will access data sequentially */
+/* 应用程序以真正的随机顺序访问线性区的页 */
 #define VM_RAND_READ	0x00010000	/* App will not benefit from clustered reads */
 
+/* 当创建一个新进程时不拷贝线性区 */
 #define VM_DONTCOPY	0x00020000      /* Do not copy this vma on fork */
 #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
 #define VM_RESERVED	0x00080000	/* Count as reserved_vm like IO */

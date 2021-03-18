@@ -75,6 +75,12 @@ void paging_init(void);
  * The vmalloc() routines leaves a hole of 4kB between each vmalloced
  * area for the same reason. ;)
  */
+/*
+ * high_memory为高端内存起始位置，即直接映射的物理内存末尾对应的线性地址
+ * VMALLOC_OFFSET为直接映射的末尾与第一个非连续内存区之间插入的安全区，8M
+ * VMAOLLOC_START为内核线性地址空间中非连续内存区的起始地址
+ * VMAOLLOC_START为内核线性地址空间中非连续内存区的尾部地址
+ */
 #define VMALLOC_OFFSET	(8*1024*1024)
 #define VMALLOC_START	(((unsigned long) high_memory + \
 			2*VMALLOC_OFFSET-1) & ~(VMALLOC_OFFSET-1))

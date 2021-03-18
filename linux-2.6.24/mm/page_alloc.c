@@ -1617,9 +1617,9 @@ restart:
 
 rebalance:
 	/*
-	 * 如果内存分配的内核控制路径不是终端处理程序或可延迟函数，
-	 * 并且试图回收页框(PF_MEMALLOC，TIF_MEMDIE标志被置位)，
-	 * 并且允许使用保留内存(__GFP_NOMEMALLOC标志被置位)，
+	 * 如果内存分配的内核控制路径不是中断处理程序或可延迟函数，
+	 * 并且试图回收页框(PF_MEMALLOC或TIF_MEMDIE标志被置位)，
+	 * 并且允许使用保留内存(__GFP_NOMEMALLOC标志未被置位)，
 	 * 则进一步降低要求，ALLOC_NO_WATERMARKS忽略水位线检查，对内存管理区执行第三次扫描
 	 */
 	if (((p->flags & PF_MEMALLOC) || unlikely(test_thread_flag(TIF_MEMDIE)))
@@ -1670,6 +1670,7 @@ nofail_alloc:
 						zonelist, alloc_flags);
 		if (page)
 			goto got_pg;
+	/* 允许内核控制路径指向依赖于文件系统的操作杀死一个进程（__GFP_FS被置位），且__GFP_NORETRY标志为0 */
 	} else if ((gfp_mask & __GFP_FS) && !(gfp_mask & __GFP_NORETRY)) {
 		if (!try_set_zone_oom(zonelist)) {
 			schedule_timeout_uninterruptible(1);
@@ -1681,6 +1682,11 @@ nofail_alloc:
 		 * very high watermark here, this is only to catch
 		 * a parallel oom killing, we must fail if we're still
 		 * under heavy pressure.
+		 */
+		/*
+		 * 这步使用的水位线远比前面扫描时使用的高，所以这步很容易失败
+		 * 实际上，只有当另一个内核控制路径已经杀死一个进程来回收内存后，这步才会成功
+		 * 因此这步避免了两个无辜的进程被杀死
 		 */
 		page = get_page_from_freelist(gfp_mask|__GFP_HARDWALL, order,
 				zonelist, ALLOC_WMARK_HIGH|ALLOC_CPUSET);
@@ -1695,6 +1701,7 @@ nofail_alloc:
 			goto nopage;
 		}
 
+		/* 调用out_of_memory通过杀死一个进程开始释放一些内存 */
 		out_of_memory(zonelist, gfp_mask, order);
 		clear_zonelist_oom(zonelist);
 		goto restart;
