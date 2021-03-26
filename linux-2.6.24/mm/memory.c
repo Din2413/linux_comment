@@ -2472,6 +2472,7 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	spinlock_t *ptl;
 
 	entry = *pte;
+	/* 线性地址对应的页还未分配物理页框，则内核分配一个新的页框并适当地初始化（请求调页） */
 	if (!pte_present(entry)) {
 		if (pte_none(entry)) {
 			if (vma->vm_ops) {
@@ -2492,6 +2493,10 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 					pte, pmd, write_access, entry);
 	}
 
+	/*
+	 * 线性地址对应的页已分配物理页框，则引发缺页异常的原因为：页标记为只读但进程进行写访问
+	 * 在此情况下，内核分配一个新的页框，并把旧页框的数据拷贝到新页框来初始化它的内容（写时复制Copy On Write）
+	 */
 	ptl = pte_lockptr(mm, pmd);
 	spin_lock(ptl);
 	if (unlikely(!pte_same(*pte, entry)))
@@ -2538,13 +2543,17 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		return hugetlb_fault(mm, vma, address, write_access);
 
+	/* 即使线性地址属于进程地址空间，但相应的页上级目录、页中间目录、页表可能还未分配 */
 	pgd = pgd_offset(mm, address);
+	/* 分配线性地址对应的页上级目录 */
 	pud = pud_alloc(mm, pgd, address);
 	if (!pud)
 		return VM_FAULT_OOM;
+	/* 分配线性地址对应的页中间目录 */
 	pmd = pmd_alloc(mm, pud, address);
 	if (!pmd)
 		return VM_FAULT_OOM;
+	/* 分配线性地址对应的页表 */
 	pte = pte_alloc_map(mm, pmd, address);
 	if (!pte)
 		return VM_FAULT_OOM;

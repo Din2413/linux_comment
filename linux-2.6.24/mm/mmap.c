@@ -889,7 +889,13 @@ void vm_stat_account(struct mm_struct *mm, unsigned long flags,
 /*
  * The caller must hold down_write(current->mm->mmap_sem).
  */
-
+/*
+ * 为当前进程创建并初始化一个新的线性区，该线性区可以将一个文件或其他对象映射进内存
+ *
+ * 分类：
+ * 根据线性区是否映射文件，线性区可分为文件映射线性区和匿名映射线性区；（文件映射file参数不为NULL）
+ * 根据线性区是否可共享，可分为共享映射线性区和私有映射线性区；（前者由MAP_SHARED指定，后者由MAP_PRIVATE指定）
+ */
 unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 			unsigned long len, unsigned long prot,
 			unsigned long flags, unsigned long pgoff)
@@ -966,9 +972,18 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 
 	inode = file ? file->f_path.dentry->d_inode : NULL;
 
+	/*
+	 * 线性区映射类型可根据是否映射文件分为两种，也可根据是否可共享分为两种
+	 * 因此总结起来线性区映射存在四种组合类型：
+	 * 1、共享文件映射：file不为NULL、flags标志MAP_SHARED被置位
+	 * 2、私有文件映射：file不为NULL、flags标志MAP_PRIVATE被置位
+	 * 3、共享匿名映射：file为NULL、flags标志MAP_SHARED被置位
+	 * 4、私有匿名映射：file为NULL、flags标志MAP_PRIVATE被置位
+	 */
 	if (file) {
 		switch (flags & MAP_TYPE) {
-		case MAP_SHARED:
+		/* 共享文件映射 */
+		case MAP_SHARED: /* MAP_SHARED表示写入线性映射区域的数据会回写到文件内，而且允许其他映射该文件的进程共享 */
 			if ((prot&PROT_WRITE) && !(file->f_mode&FMODE_WRITE))
 				return -EACCES;
 
@@ -990,7 +1005,8 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 				vm_flags &= ~(VM_MAYWRITE | VM_SHARED);
 
 			/* fall through */
-		case MAP_PRIVATE:
+		/* 匿名文件映射 */
+		case MAP_PRIVATE: /* MAP_PRIVATE表示对线性映射区域的写入操作会产生一个映射文件的复制，即私有的“写入时复制”(copy on write)，对此区域作的任何修改都不会写回原来的文件内容。 */
 			if (!(file->f_mode & FMODE_READ))
 				return -EACCES;
 			if (file->f_path.mnt->mnt_flags & MNT_NOEXEC) {
@@ -1010,9 +1026,11 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 		}
 	} else {
 		switch (flags & MAP_TYPE) {
+		/* 共享匿名映射 */
 		case MAP_SHARED:
 			vm_flags |= VM_SHARED | VM_MAYSHARE;
 			break;
+		/* 私有匿名映射 */
 		case MAP_PRIVATE:
 			/*
 			 * Set pgoff according to addr for anon_vma.
@@ -1139,8 +1157,10 @@ munmap_back:
 
 	if (file) {
 		error = -EINVAL;
+		/* 当参数flags中的VM_GROWSDOWN或VM_GROWSUP标志位为1时，说明这个区间可以向低地址或高地址扩展，但从文件映射的区间不能进行扩展 */
 		if (vm_flags & (VM_GROWSDOWN|VM_GROWSUP))
 			goto free_vma;
+		/* 当flags中的VM_DENYWRITE标志位为1时，就表示不允许通过常规的文件操作访问该文件，所以要调用deny_write_access()排斥常规的文件操作 */
 		if (vm_flags & VM_DENYWRITE) {
 			error = deny_write_access(file);
 			if (error)

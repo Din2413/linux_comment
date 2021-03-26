@@ -293,6 +293,17 @@ int show_unhandled_signals = 1;
  *	bit 3 == 1 means use of reserved bit detected
  *	bit 4 == 1 means fault was an instruction fetch
  */
+/*
+ * 缺页异常处理程序
+ * 必须区分以下两种情况：由编程错误引起的异常，由引用属于进程地址空间但还尚未分配物理页框引起的异常
+ */
+/*
+ * pt_regs：包含当异常发生时处理器寄存器的值
+ * error_code：当异常发生时由控制单元压入栈中，其含义如下
+ * 1、如果第0位被清0，则异常由一个访问一个不存在的页所引起；否则，异常由无效的访问权限所引起；
+ * 2、如果第1位被清0，则异常由读访问或者执行访问所引起；否则，异常由写访问所引起；
+ * 3、如果第2位被清0，则异常发生在处理器处于内核态时；否则，异常发生在处理器处于用户态时；
+ */
 fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 				      unsigned long error_code)
 {
@@ -309,6 +320,7 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 	trace_hardirqs_fixup();
 
 	/* get the address */
+	/* 读取引起缺页的线性地址 */
         address = read_cr2();
 
 	tsk = current;
@@ -328,7 +340,9 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 	 * (error_code & 4) == 0, and that the fault was not a
 	 * protection error (error_code & 9) == 0.
 	 */
+	/* 内核空间的线性地址大于或等于TASK_SIZE */
 	if (unlikely(address >= TASK_SIZE)) {
+		/* 内核试图访问不存在的页框引起的异常，vmlloc_fault处理在内核态访问非连续内存区而引起的缺页 */
 		if (!(error_code & 0x0000000d) && vmalloc_fault(address) >= 0)
 			return;
 		if (notify_page_fault(regs))
@@ -353,6 +367,14 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 	/*
 	 * If we're in an interrupt, have no user context or are running in an
 	 * atomic region then we must not take the fault..
+	 */
+	/*
+	 * 如果缺页发生在下面任何一种情况，则in_atomic()宏值为1：
+	 * 1、内核正在执行中断处理程序或可延迟函数；
+	 * 2、内核正在禁用内核抢占的情况下执行临界区代码；
+	 *
+	 * 如果缺页的确发生在中断处理程序、可延迟函数、临界区或内核线程(只使用高于TASK_SIZE的内核空间)中，
+	 * 即引起缺页的线性地址则不会小于TASK_SIZE，缺页异常处理程序便不会试图把这个线性地址与current的线性区做比较
 	 */
 	if (in_atomic() || !mm)
 		goto bad_area_nosemaphore;
@@ -379,13 +401,30 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 		down_read(&mm->mmap_sem);
 	}
 
+	/*
+	 * 缺页未发生在中断处理程序、可延迟函数、临界区或内核线程中，
+	 * 缺页异常处理程序必须检查进程所拥有的线性区以决定引起缺页的线性地址是否包含在进程的地址空间中
+	 */
 	vma = find_vma(mm, address);
+	/*
+	 * 引起缺页异常的线性地址后没有线性区存在，
+	 * 但根据进程地址空间布局可知，栈线性区位于地址空间底部，
+	 * 因此可知该地址必然在栈线性区之后，即为无效地址
+	 */
 	if (!vma)
 		goto bad_area;
+	/* 引起缺页异常的线性地址被包含在线性区内，表明该地址属于进程地址空间，即为有效地址 */
 	if (vma->vm_start <= address)
 		goto good_area;
+	/*
+	 * 引起缺页异常的线性地址未被包含在任何线性区内，并不能直接断定该地址为无效地址，
+	 * 因为该地址可能因栈区地址空间不足而被入栈操作引用，而栈区的VM_GROWSDOWN标志被置位，
+	 * 如果该地址后的第一个线性区VM_GROWSDOWN标志未被置位，则表明缺页异常不由入栈操作引起，
+	 * 即该地址为无效地址
+	 */
 	if (!(vma->vm_flags & VM_GROWSDOWN))
 		goto bad_area;
+	/* 引起缺页异常的线性地址后的第一个线性区为栈区，且异常发生在用户态，则需检查该地址是否小于regs->esp栈顶地址 */
 	if (error_code & 4) {
 		/*
 		 * Accessing the stack below %esp is always a bug.
@@ -396,36 +435,50 @@ fastcall void __kprobes do_page_fault(struct pt_regs *regs,
 		if (address + 65536 + 32 * sizeof(unsigned long) < regs->esp)
 			goto bad_area;
 	}
+	/* 扩展current的栈区空间 */
 	if (expand_stack(vma, address))
 		goto bad_area;
 /*
  * Ok, we have a good vm_area for this memory access, so
  * we can handle it..
  */
+/* 引起缺页异常的线性地址属于进程地址空间 */
 good_area:
 	si_code = SEGV_ACCERR;
 	write = 0;
 	switch (error_code & 3) {
+		/* 线性地址所属页已分配物理页框，且由写访问导致 */
 		default:	/* 3: write, present */
 				/* fall through */
+		/* 线性地址所属页未分配物理页框，且由写访问导致 */
 		case 2:		/* write, not present */
+			/* 检查线性区访问权限，如不满足，则直接抛出异常 */
 			if (!(vma->vm_flags & VM_WRITE))
 				goto bad_area;
 			write++;
 			break;
+		/* 线性地址所属页已分配物理页框，且由读/执行访问导致 */
 		case 1:		/* read, present */
+			/*
+			 * 在此情况下，异常发生是由于进程试图访问用户态下一个有特权的页框，则直接抛出异常
+			 * （这种情况从不会发生，内核不会把具有特权的页框赋给用户态进程）
+			 */
 			goto bad_area;
+		/* 线性地址所属页未分配物理页框，且由读/执行访问导致 */
 		case 0:		/* read, not present */
+			/* 检查线性区访问权限，如不满足，则直接抛出异常 */
 			if (!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE)))
 				goto bad_area;
 	}
 
+/* 线性区的访问权限与引起缺页异常的访问权限相匹配 */
  survive:
 	/*
 	 * If for any reason at all we couldn't handle the fault,
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
+	 /* 分配一个新的页框 */
 	fault = handle_mm_fault(mm, vma, address, write);
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		if (fault & VM_FAULT_OOM)
@@ -454,6 +507,7 @@ good_area:
  * Something tried to access memory that isn't in our memory map..
  * Fix it, but check if it's kernel or user first..
  */
+/* 引起缺页异常的线性地址为无效地址、且不属于栈地址扩展，或访问权限不匹配 */
 bad_area:
 	up_read(&mm->mmap_sem);
 
