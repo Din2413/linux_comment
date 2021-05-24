@@ -171,9 +171,14 @@ struct vm_fault {
  * unmapping it (needed to keep files on disk up-to-date etc), pointer
  * to the functions called when a no-page or a wp-page exception occurs. 
  */
+/*
+ * vma虚拟内存区域操作函数集
+ * 在创建vma时指定，比如共享内存对应的操作集为`shmem_vm_ops`、ext3文件系统对应为`generic_file_vm_ops`
+ */
 struct vm_operations_struct {
 	void (*open)(struct vm_area_struct * area);
 	void (*close)(struct vm_area_struct * area);
+	/* fault/nopage 当虚存页面不在物理内存而引起的“缺页异常”时被缺页处理函数调用 */
 	int (*fault)(struct vm_area_struct *vma, struct vm_fault *vmf);
 	struct page *(*nopage)(struct vm_area_struct *area,
 			unsigned long address, int *type);

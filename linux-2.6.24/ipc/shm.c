@@ -492,6 +492,7 @@ static inline int shm_more_checks(struct kern_ipc_perm *ipcp,
 	return 0;
 }
 
+/* 获取一个IPC共享内存区的标识符，如果这个共享内存区不存在就创建它 */
 asmlinkage long sys_shmget (key_t key, size_t size, int shmflg)
 {
 	struct ipc_namespace *ns;
@@ -1048,6 +1049,7 @@ out_put_dentry:
 	goto out_nattch;
 }
 
+/* 把一个共享内存区附加attach到进程的地址空间，shmid表示IPC共享内存区的标识符 */
 asmlinkage long sys_shmat(int shmid, char __user *shmaddr, int shmflg)
 {
 	unsigned long ret;

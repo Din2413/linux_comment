@@ -455,6 +455,13 @@ cannot_free:
 /*
  * shrink_page_list() returns the number of reclaimed pages
  */
+/*
+ * shrink_page_list对page_list中的页框尝试进行回收，并返回回收页框个数
+ * 页框存在三种处理结果：
+ * 1、调用free_cold_page，把页释放到管理区伙伴系统内；
+ * 2、页没有被回收，将被放回内存管理区的非活动链表中；
+ * 3、页没有被回收，将被放回内存管理区的活动链表中；
+ */
 static unsigned long shrink_page_list(struct list_head *page_list,
 					struct scan_control *sc,
 					enum pageout_io sync_writeback)
@@ -478,6 +485,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
 
+		/* 页被锁定，则重新放回非活动链表 */
 		if (TestSetPageLocked(page))
 			goto keep;
 
@@ -485,6 +493,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 		sc->nr_scanned++;
 
+		/* 不允许swap交换，且页属于进程用户态地址空间，则重新放回非活动链表 */
 		if (!sc->may_swap && page_mapped(page))
 			goto keep_locked;
 
@@ -799,6 +808,7 @@ static unsigned long clear_active_flags(struct list_head *page_list)
  * shrink_inactive_list() is a helper for shrink_zone().  It returns the number
  * of reclaimed pages
  */
+/* 从管理区非活动链表回收页框 */
 static unsigned long shrink_inactive_list(unsigned long max_scan,
 				struct zone *zone, struct scan_control *sc)
 {
@@ -818,14 +828,21 @@ static unsigned long shrink_inactive_list(unsigned long max_scan,
 		unsigned long nr_freed;
 		unsigned long nr_active;
 
+		/*
+		 * 从管理区非活动链表移动最多32页到page_list临时链表中
+		 * 为了尽快回收到阶为order的连续物理页框块，移动非活动页框时
+		 * 也会对所属阶为order的、处在LRU链表的其他物理页框进行处理，而不管是否为active
+		 */
 		nr_taken = isolate_lru_pages(sc->swap_cluster_max,
 			     &zone->inactive_list,
 			     &page_list, &nr_scan, sc->order,
 			     (sc->order > PAGE_ALLOC_COSTLY_ORDER)?
 					     ISOLATE_BOTH : ISOLATE_INACTIVE);
+		/* 对移动到page_list链表内的，状态为active的页框清除active状态 */
 		nr_active = clear_active_flags(&page_list);
 		__count_vm_events(PGDEACTIVATE, nr_active);
 
+		/* 更新管理区中NR_ACTIVE和NR_INACTIVE页框数量 */
 		__mod_zone_page_state(zone, NR_ACTIVE, -nr_active);
 		__mod_zone_page_state(zone, NR_INACTIVE,
 						-(nr_taken - nr_active));
@@ -833,6 +850,7 @@ static unsigned long shrink_inactive_list(unsigned long max_scan,
 		spin_unlock_irq(&zone->lru_lock);
 
 		nr_scanned += nr_scan;
+		/* 对page_list中可回收的页框进行回收处理，不可回收的页框依旧保留在链表中，后续再重新插入到管理区活动链表或非活动链表 */
 		nr_freed = shrink_page_list(&page_list, sc, PAGEOUT_IO_ASYNC);
 
 		/*
@@ -872,6 +890,7 @@ static unsigned long shrink_inactive_list(unsigned long max_scan,
 		/*
 		 * Put back any unfreeable pages.
 		 */
+		/* 将page_list中未被回收的页框再重新插入到管理区活动链表或非活动链表 */
 		while (!list_empty(&page_list)) {
 			page = lru_to_page(&page_list);
 			VM_BUG_ON(PageLRU(page));
@@ -945,6 +964,7 @@ static void shrink_active_list(unsigned long nr_pages, struct zone *zone,
 	struct pagevec pvec;
 	int reclaim_mapped = 0;
 
+	/* 指定是否可通过swap交换回收进程用户态地址空间的页框，may_swap为1表示可以 */
 	if (sc->may_swap) {
 		long mapped_ratio;
 		long distress;
@@ -981,6 +1001,17 @@ static void shrink_active_list(unsigned long nr_pages, struct zone *zone,
 		 *
 		 * A 100% value of vm_swappiness overrides this algorithm
 		 * altogether.
+		 */
+		/*
+		 * 整个LRU链表中存在两种物理页框：属于用户态地址空间的页框，不属于任何进程地址空间且在页高速缓存中的页框
+		 * 因swap回收用户态地址空间的页框对进程运行会产生较大影响，内存回收更倾向于缩减页高速缓存，而尽量将进程地址空间的页留在RAM中
+		 * 但没有一种确定的黄金法则可保证系统的高性能，内核则采用交换倾向（swap tendency）经验值，决定是否回收进程地址空间的页
+		 * 只有当交换倾向经验值大于等于100时，内存回收才会对属于进程用户态地址空间的页框进行回收
+		 *
+		 * 交换倾向的计算方式为：交换倾向值 = 映射比例 / 2 + 负荷值 + 交换值；
+		 * 映射比率是用户态地址空间所有内存管理区的页占所有可分配页框数的百分比
+		 * 负荷值用于表示内存回收在管理区中回收页框的效率，取决于前一次内存回收的优先级
+		 * 交换值为vm_swappiness常数，用户可通过/proc/sys/vm/swappiness进行修改
 		 */
 		swap_tendency = mapped_ratio / 2 + distress + sc->swappiness;
 
@@ -1034,6 +1065,7 @@ force_reclaim_mapped:
 	}
 
 	lru_add_drain();
+	/* LRU链表需采用lru_lock自旋锁互斥保护，为提高执行效率，将nr_pages个页一并移动到l_hold链表上，而不是逐个判断是否满足inactive条件 */
 	spin_lock_irq(&zone->lru_lock);
 	pgmoved = isolate_lru_pages(nr_pages, &zone->active_list,
 			    &l_hold, &pgscanned, sc->order, ISOLATE_ACTIVE);
@@ -1045,7 +1077,15 @@ force_reclaim_mapped:
 		cond_resched();
 		page = lru_to_page(&l_hold);
 		list_del(&page->lru);
+		/* 物理页框存在对应的页表项映射，即该页属于进程用户态地址空间，而不属于页高速缓存 */
 		if (page_mapped(page)) {
+			/*
+			 * 当满足一下条件时，不能回收进程用户态地址空间的页框，将页框移动到l_active链表
+			 * 1、scan_control的may_swap指定为0；
+			 * 2、scan_control的may_swap指定为1，但当前管理区未接近oom（zone_is_near_oom判断）或交换倾向swap_tendency小于100；
+			 * 3、total_swap_pages指定系统可将anonymous page交换到磁盘的大小为0，且当前页框为匿名页；
+			 * 4、page_referenced为true，指定当前页框最近被访问过，根据局部性原理，该页框后面还可能需要被访问；
+			 */
 			if (!reclaim_mapped ||
 			    (total_swap_pages == 0 && PageAnon(page)) ||
 			    page_referenced(page, 0)) {
@@ -1053,9 +1093,11 @@ force_reclaim_mapped:
 				continue;
 			}
 		}
+		/* 物理页框不被某一页表项映射，或者物理页框可以被回收时，将页框移动到l_inactive链表 */
 		list_add(&page->lru, &l_inactive);
 	}
 
+	/* 将l_inactive链表页框移动到zone->inactive_list，表示为可回收页框 */
 	pagevec_init(&pvec, 1);
 	pgmoved = 0;
 	spin_lock_irq(&zone->lru_lock);
@@ -1088,6 +1130,7 @@ force_reclaim_mapped:
 		spin_lock_irq(&zone->lru_lock);
 	}
 
+	/* 将l_active链表页框移动到zone->active_list，表示为不可回收页框 */
 	pgmoved = 0;
 	while (!list_empty(&l_active)) {
 		page = lru_to_page(&l_active);
@@ -1122,10 +1165,10 @@ force_reclaim_mapped:
  * 1、将LRU active_list中的非活跃页框移到inactive_list；
  * 2、对inactive_list可回收的页框进行回收处理；
  *
- * 三个调用路径：
- * 1、低水位分配失败异步回收：kswapd->balance_pgdat->shrink_zone
+ * 页框回收算法的三个基本情形：
+ * 1、kswapd内核线性（低水位分配失败时唤醒、周期性唤醒）：kswapd->balance_pgdat->shrink_zone
  * 2、zone水位线检测失败时依据zone_reclaim_mode决定是否立即对zone回收：zone_reclaim->__zone_reclaim->shrink_zone
- * 3、最小水位线分配失败同步回收：try_to_free_pages->shrink_zones->shrink_zone
+ * 3、内存极度紧缺（__alloc_pages最小水位线分配失败、alloc_page_buffers/__getblk_slow缓存区分配失败）：try_to_free_pages->shrink_zones->shrink_zone
  */
 static unsigned long shrink_zone(int priority, struct zone *zone,
 				struct scan_control *sc)
@@ -1139,6 +1182,12 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 	 * Add one to `nr_to_scan' just to make sure that the kernel will
 	 * slowly sift through the active list.
 	 */
+	/*
+	 * 递增zone->nr_scan_active,增量为活动链表的一部分，实际增量取决于当前优先级
+	 * 范围是zone_page_state(zone, NR_ACTIVE)/(2^12)到zone_page_state(zone, NR_ACTIVE)/(2^0)
+	 * 优先级越高，增量越大，该值表示当前优先级下，从active_list迁移到inactive_list的非活动页框个数
+	 * 当值超过sc->swap_cluster_max时，nr_scan_inactive则从0开始重新计数
+	 */
 	zone->nr_scan_active +=
 		(zone_page_state(zone, NR_ACTIVE) >> priority) + 1;
 	nr_active = zone->nr_scan_active;
@@ -1147,6 +1196,12 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 	else
 		nr_active = 0;
 
+	/*
+	 * 递增zone->nr_scan_inactive,增量为非活动链表的一部分，实际增量取决于当前优先级
+	 * 范围是zone_page_state(zone, NR_INACTIVE)/(2^12)到zone_page_state(zone, NR_INACTIVE)/(2^0)
+	 * 优先级越高，增量越大，该值表示当前优先级下，可从inactive_list回收的非活动页框个数
+	 * 当值超过sc->swap_cluster_max时，nr_scan_inactive则从0开始重新计数
+	 */
 	zone->nr_scan_inactive +=
 		(zone_page_state(zone, NR_INACTIVE) >> priority) + 1;
 	nr_inactive = zone->nr_scan_inactive;
@@ -1155,7 +1210,9 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 	else
 		nr_inactive = 0;
 
+	/* 内存回收均是对inactive_list中可回收页框进行回收处理，但在回收之前需尝试将LRU active_list中非活跃页框移到inactive_list */
 	while (nr_active || nr_inactive) {
+		/* nr_active大于0，则每次循环尝试从活动链表迁移最多sc->swap_cluster_max（值设置为32）个页框到非活动链表 */
 		if (nr_active) {
 			nr_to_scan = min(nr_active,
 					(unsigned long)sc->swap_cluster_max);
@@ -1163,6 +1220,7 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 			shrink_active_list(nr_to_scan, zone, sc, priority);
 		}
 
+		/* nr_inactive大于0，则每次循环尝试从非活动链表回收最多sc->swap_cluster_max（值设置为32）个页框 */
 		if (nr_inactive) {
 			nr_to_scan = min(nr_inactive,
 					(unsigned long)sc->swap_cluster_max);
@@ -1233,6 +1291,7 @@ static unsigned long shrink_zones(int priority, struct zone **zones,
  * holds filesystem locks which prevent writeout this might not work, and the
  * allocation attempt will fail.
  */
+/* 伙伴系统page_allocs分配页框无法满足时，则调用try_to_free_pages同步回收内存 */
 unsigned long try_to_free_pages(struct zone **zones, int order, gfp_t gfp_mask)
 {
 	int priority;
@@ -1263,17 +1322,20 @@ unsigned long try_to_free_pages(struct zone **zones, int order, gfp_t gfp_mask)
 				+ zone_page_state(zone, NR_INACTIVE);
 	}
 
+	/* 从优先级12到0，执行最多13次循环 */
 	for (priority = DEF_PRIORITY; priority >= 0; priority--) {
 		sc.nr_scanned = 0;
 		if (!priority)
 			disable_swap_token();
 		nr_reclaimed += shrink_zones(priority, zones, &sc);
+		/* 从可压缩内核高速缓存中回收页 */
 		shrink_slab(sc.nr_scanned, gfp_mask, lru_pages);
 		if (reclaim_state) {
 			nr_reclaimed += reclaim_state->reclaimed_slab;
 			reclaim_state->reclaimed_slab = 0;
 		}
 		total_scanned += sc.nr_scanned;
+		/* 达到内存回收目标，即回收页框数最少为32页，则跳出循环 */
 		if (nr_reclaimed >= sc.swap_cluster_max) {
 			ret = 1;
 			goto out;
@@ -1286,17 +1348,22 @@ unsigned long try_to_free_pages(struct zone **zones, int order, gfp_t gfp_mask)
 		 * that's undesirable in laptop mode, where we *want* lumpy
 		 * writeout.  So in laptop mode, write out the whole world.
 		 */
+		/* 未达到目标，但已扫描完成至少49页 */
 		if (total_scanned > sc.swap_cluster_max +
 					sc.swap_cluster_max / 2) {
+			/* 调用wakeup_pdflush激活pdflush内核现场 */
 			wakeup_pdflush(laptop_mode ? 0 : total_scanned);
+			/* 允许将页高速缓存中的脏页写入磁盘 */
 			sc.may_writepage = 1;
 		}
 
 		/* Take a nap, wait for some writeback to complete */
+		/* 如果已执行4次迭代但又未达到内存回收目标，则调用congestion_wait挂起进程，直到没有阻塞的WRITE请求队列或100ms超时 */
 		if (sc.nr_scanned && priority < DEF_PRIORITY - 2)
 			congestion_wait(WRITE, HZ/10);
 	}
 	/* top priority shrink_caches still had more to do? don't OOM, then */
+	/* 执行13次循环都未达到内存回收目标，且所有管理区已分配的页框均不可回收，依旧返回成功避免触发oom */
 	if (!sc.all_unreclaimable)
 		ret = 1;
 out:

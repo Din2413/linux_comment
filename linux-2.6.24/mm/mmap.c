@@ -943,6 +943,7 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
 	 */
+	/* 搜查进程地址空间以找到一个满足条件的线性地址区间 */
 	addr = get_unmapped_area(file, addr, len, pgoff, flags);
 	if (addr & ~PAGE_MASK)
 		return addr;
@@ -983,7 +984,7 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 	if (file) {
 		switch (flags & MAP_TYPE) {
 		/* 共享文件映射 */
-		case MAP_SHARED: /* MAP_SHARED表示写入线性映射区域的数据会回写到文件内，而且允许其他映射该文件的进程共享 */
+		case MAP_SHARED: /* MAP_SHARED表示写入线性映射区域的数据会回写到文件内，允许其他映射该文件的进程共享 */
 			if ((prot&PROT_WRITE) && !(file->f_mode&FMODE_WRITE))
 				return -EACCES;
 
@@ -1046,6 +1047,14 @@ unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
 	if (error)
 		return error;
 
+	/*
+	 * 可用线性区的起始地址addr存在两种情况，一种为MAP_FIXED，一种为非MAP_FIXED
+	 * 当MAP_FIXED时，addr只要页对齐，且len不超过TASK_SIZE即可，此时addr~addr+len之间的区域必然存在两种情况
+	 *     1、中间存在已分配的线性区，即存在交叉，需对交叉覆盖的线性区部分进行回收；
+	 *     2、中间不存在已分配的线性区，即不存在交叉，可直接分配；
+	 * 当非MAP_FIXED时，addr~addr+len之间的区域只存在一种情况，即必然满足分配。
+	 * mmap_region对上述各种情况进行处理，包括交叉线性区的回收，以及新线性区的创建
+	 */
 	return mmap_region(file, addr, len, flags, vm_flags, pgoff,
 			   accountable);
 }
@@ -1132,6 +1141,7 @@ munmap_back:
 	 * The VM_SHARED test is necessary because shmem_zero_setup
 	 * will create the file object for a shared anonymous map below.
 	 */
+	/* 新线性区私有且不映射磁盘文件，则执行vma_merge检查前一个线性区是否可以与新线性区合并扩展 */
 	if (!file && !(vm_flags & VM_SHARED) &&
 	    vma_merge(mm, prev, addr, addr + len, vm_flags,
 					NULL, NULL, pgoff, NULL))
@@ -1169,6 +1179,7 @@ munmap_back:
 		}
 		vma->vm_file = file;
 		get_file(file);
+		/* 不同文件系统定义的mmap钩子，比如ext3文件系统对应为`generic_file_mmap` */
 		error = file->f_op->mmap(file, vma);
 		if (error)
 			goto unmap_and_free_vma;
@@ -1252,10 +1263,11 @@ unacct_error:
  *
  * This function "knows" that -ENOMEM has the bits set.
  */
-/*
- * 从进程地址空间自底向上地查找一个可用的线性区
- */
 #ifndef HAVE_ARCH_UNMAPPED_AREA
+/*
+ * 默认的自底向上查找可用线性区的处理函数
+ * HAVE_ARCH_UNMAPPED_AREA宏若定义，则标识体系结构代码中存在自定义的处理函数
+ */
 unsigned long
 arch_get_unmapped_area(struct file *filp, unsigned long addr,
 		unsigned long len, unsigned long pgoff, unsigned long flags)
@@ -1267,17 +1279,40 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	if (len > TASK_SIZE)
 		return -ENOMEM;
 
+	/*
+	 * MAP_FIXED指定新线性区必须起始于指定的地址addr
+	 * 此处不做有效性判断（地址是否页对齐、剩余空间是否足够容纳len长度内容），而是交由上级函数校验
+	 */
 	if (flags & MAP_FIXED)
 		return addr;
 
 	/* addr不为0，则指定必须从哪个地址开始查找 */
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
+		/*
+		 * 查找addr地址后的首个线性区，该线性区包含/不包含addr地址
+		 * 即 addr < vma->vm_start 或者 vma->vm_start <= addr < vma->vm_end
+		 */
 		vma = find_vma(mm, addr);
+		/* 若指定地址addr后不存在线性区而剩余地址空间足够容纳len长度，
+		 * 或，其后的首个线性区不包含addr地址且指定地址到线性区首地址的中间区间足够容纳len长度
+		 * 则addr满足条件，直接返回
+		 */
 		if (TASK_SIZE - len >= addr &&
 		    (!vma || addr + len <= vma->vm_start))
 			return addr;
 	}
+	/*
+	 * 如果地址未指定或指定起始地址addr不满足线性区的分配条件时，则对整个地址空间进行遍历以查找满足条件的空间
+	 *
+	 * mm->cached_hole_size存放前一次线性区查找成功前遍历过的不满足分配的所有间隙（两线性区的中间区域）的最大长度
+	 * mm->free_area_cache存放前一次线性区分配时，新线性区起始地址 + 新线性区长度的地址
+	 * 如: 前一次线性区分配的起始地址为addr、长度len，新线性区之前存在vma1、vma2、...、vman
+	 *     则cache_hole_size值为(vman->start - vman-1->start)的最大值，free_area_cache值为(addr + len)
+	 *
+	 * 如果当前线性区要求的长度len大于cached_hole_size，则可认为前面线性区的间隙也不满足分配，则需从前一次分配的线性区结束地址开始遍历查找
+	 * 如果当前线性区要求的长度len不大于cached_hole_size，则认为前面线性区的间隙存在可满足分配的，则从整个映射空间的起始地址查找
+	 */
 	if (len > mm->cached_hole_size) {
 	        start_addr = addr = mm->free_area_cache;
 	} else {
@@ -1286,12 +1321,17 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	}
 
 full_search:
+	/* 从指定的地址遍历整个映射空间 */
 	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
 		/* At this point:  (!vma || addr < vma->vm_end). */
 		if (TASK_SIZE - len < addr) {
 			/*
 			 * Start a new search - just in case we missed
 			 * some holes.
+			 */
+			/*
+			 * addr地址后剩余空间不满足，且遍历的起始地址(即mm->free_area_cache)不为映射空间的起始地址
+			 * 则更改遍历起始地址并跳回映射空间的起始地址处重新遍历
 			 */
 			if (start_addr != TASK_UNMAPPED_BASE) {
 				addr = TASK_UNMAPPED_BASE;
@@ -1308,6 +1348,10 @@ full_search:
 			mm->free_area_cache = addr + len;
 			return addr;
 		}
+		/*
+		 * vma前的间隙不满足分配，且间隙长度大于之前遍历的、不满足分配的间隙长度
+		 * 则更新cached_hole_size记录该长度，即cached_hole_size记录遍历过的不满足分配的所有间隙的最大长度
+		 */
 		if (addr + mm->cached_hole_size < vma->vm_start)
 		        mm->cached_hole_size = vma->vm_start - addr;
 		addr = vma->vm_end;
@@ -1331,6 +1375,10 @@ void arch_unmap_area(struct mm_struct *mm, unsigned long addr)
  * stack's low limit (the base):
  */
 #ifndef HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
+/*
+ * 默认的自上而下查找可用线性区的处理函数
+ * HAVE_ARCH_UNMAPPED_AREA_TOPDOWN宏若定义，则标识体系结构代码中存在自定义的处理函数
+ */
 unsigned long
 arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 			  const unsigned long len, const unsigned long pgoff,

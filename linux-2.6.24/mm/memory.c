@@ -2476,6 +2476,10 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	if (!pte_present(entry)) {
 		if (pte_none(entry)) {
 			if (vma->vm_ops) {
+				/*
+				 * 实现vma操作函数集合中的fault或nopage钩子函数，那么这种情况属于基于文件的内存映射，
+				 * 它调用do_linear_fault()进行分配物理页框
+				 */
 				if (vma->vm_ops->fault || vma->vm_ops->nopage)
 					return do_linear_fault(mm, vma, address,
 						pte, pmd, write_access, entry);
@@ -2486,9 +2490,11 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 			return do_anonymous_page(mm, vma, address,
 						 pte, pmd, write_access);
 		}
+		/* 属于非线性文件映射且已被换出 */
 		if (pte_file(entry))
 			return do_nonlinear_fault(mm, vma, address,
 					pte, pmd, write_access, entry);
+		/* 页不在主存中，但是页表项保存了相关信息，则表明该页被内核换出，则要进行换入操作 */
 		return do_swap_page(mm, vma, address,
 					pte, pmd, write_access, entry);
 	}

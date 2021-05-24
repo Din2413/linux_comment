@@ -39,6 +39,7 @@ struct page {
 					 * updated asynchronously */
 	atomic_t _count;		/* Usage count, see below. */
 	union {
+		/* 物理页框所映射的页表项数量 */
 		atomic_t _mapcount;	/* Count of ptes mapped in mms,
 					 * to show when page is mapped
 					 * & limit reverse map searches.
@@ -183,7 +184,13 @@ struct mm_struct {
 	void (*unmap_area) (struct mm_struct *mm, unsigned long addr);
 	unsigned long mmap_base;		/* base of mmap area */
 	unsigned long task_size;		/* size of task vm space */
+	/*
+	 * 存放前一次线性区查找成功前遍历过的不满足分配的所有间隙（两线性区的中间区域）的最大长度
+	 * 新查找线性区的长度若大于该值，则直接从最后一次分配的线性区尾部开始查找即可，因该地址之前所有间隙都不满足分配
+	 * 可用于减少不必要的线性区遍历
+	 */
 	unsigned long cached_hole_size; 	/* if non-zero, the largest hole below free_area_cache */
+	/* 存放前一次线性区分配时，新线性区起始地址 + 新线性区长度的地址，结合cached_hole_size快速确定线性区遍历起始地址 */
 	unsigned long free_area_cache;		/* first hole of size cached_hole_size or larger */
 	/* 指向页全局目录 */
 	pgd_t * pgd;
