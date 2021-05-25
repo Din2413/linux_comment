@@ -6,7 +6,8 @@ linux code comment for 2.6.24
 
 # 内存管理
 ## 思维导图
-![内存管理思维导图](https://raw.githubusercontent.com/Din2413/linux_comment/master/files/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86.jpg)
+
+<img src="https://raw.githubusercontent.com/Din2413/linux_comment/master/files/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86.jpg" width="50%" height="50%"/><br/>
 
 ## 后续课题
 1.内存水位线:high、low、min；</br>
