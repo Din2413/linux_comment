@@ -294,7 +294,7 @@
 
         为尽量降低高速缓存的这种不愉快行为，slab分配器引入了一种叫做**slab着色**的策略，**把叫做颜色的不同随机数分配给不同slab的首个对象的起始偏移**。**颜色只是用来细分slab，具有不同颜色的slab把slab的第一个对象存放在不同的内存单元**。**可用颜色的个数与slab内空闲未用的字节free和硬件高速缓存行大小有关**（free/按硬件高速缓存行对齐的长度），只有当free足够大时，着色才起作用。不然空闲未用字节不足以容纳按硬件高速缓存行对齐的偏移长度，导致唯一可能着色的slab就是具有颜色0的slab，也就是把这个slab的第一个对象偏移量增加0个字节，即不起任何作用。
 
-        ![LInux中的物理内存管理 - jack.chen - 博客园](https://raw.githubusercontent.com/Din2413/linux_comment/master/files/slab%E7%9D%80%E8%89%B2.png)
+        ![slab着色](https://raw.githubusercontent.com/Din2413/linux_comment/master/files/slab%E7%9D%80%E8%89%B2.png)
 
         与伙伴系统每CPU页框高速缓存类似，为减少处理器之间对自旋锁的竞争并更好的理由硬件高速缓存，slab分配器的每个高速缓存包含一个被称作slab本地高速缓存的每CPU数据结构，该结构由**一个指向被释放对象的指针数组组成**。slab对象的大多数分配和释放只影响本地数组，只有在本地数组下溢或上溢时才涉及slab数据结构。
 
