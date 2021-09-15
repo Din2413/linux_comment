@@ -494,11 +494,18 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
 				struct page *page, void *fsdata);
 
 struct backing_dev_info;
+/* 用于关联文件对象实例file与磁盘存储器上存储文件内容的区域 */
 struct address_space {
+	/*
+	 * 文件结点，用于保存文件在磁盘中的信息，
+	 * 一个文件对应一个结点inode，但可以被打开多次，
+	 * 每次创建一个文件对象file
+	 */
 	struct inode		*host;		/* owner: inode, block_device */
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
 	rwlock_t		tree_lock;	/* and rwlock protecting it */
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
+	/* 优先查找数，用于建立文件中某一区域与映射该区域的所有虚拟地址空间之间的关联 */
 	struct prio_tree_root	i_mmap;		/* tree of private and shared mappings */
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	spinlock_t		i_mmap_lock;	/* protect tree, count, list */
@@ -588,18 +595,31 @@ static inline int mapping_writably_mapped(struct address_space *mapping)
 #define i_size_ordered_init(inode) do { } while (0)
 #endif
 
+/*
+ * VFS虚拟文件系统中的索引结点对象
+ * 索引结点对象对文件是唯一的，且与磁盘中存储的索引结点一一对应
+ */
 struct inode {
+	/* 为加快索引结点搜索，系统内索引结点对象也存放在一个称为inode_hashtable的散列表中，i_hash链入散列冲突链表 */
 	struct hlist_node	i_hash;
 	struct list_head	i_list;
+	/* 链入每文件系统的、索引结点对象的双向循环链表 */
 	struct list_head	i_sb_list;
+	/*
+	 * 指向引用索引结点的目录项对象链表头
+	 * 一个索引结点对象与一个磁盘文件对应，但可能被多个（如：硬链接）目录项引用
+	 */
 	struct list_head	i_dentry;
+	/* 索引结点inode号 */
 	unsigned long		i_ino;
 	atomic_t		i_count;
+	/* 硬链接数目 */
 	unsigned int		i_nlink;
 	uid_t			i_uid;
 	gid_t			i_gid;
 	dev_t			i_rdev;
 	unsigned long		i_version;
+	/* 文件的大小，实际占用的字节数 */
 	loff_t			i_size;
 #ifdef __NEED_I_SIZE_ORDERED
 	seqcount_t		i_size_seqcount;
@@ -608,6 +628,7 @@ struct inode {
 	struct timespec		i_mtime;
 	struct timespec		i_ctime;
 	unsigned int		i_blkbits;
+	/* 文件所占用的磁盘块数 */
 	blkcnt_t		i_blocks;
 	unsigned short          i_bytes;
 	umode_t			i_mode;
@@ -616,6 +637,7 @@ struct inode {
 	struct rw_semaphore	i_alloc_sem;
 	const struct inode_operations	*i_op;
 	const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
+	/* 指向所属文件系统的超级块对象 */
 	struct super_block	*i_sb;
 	struct file_lock	*i_flock;
 	struct address_space	*i_mapping;
@@ -774,6 +796,7 @@ static inline int ra_has_index(struct file_ra_state *ra, pgoff_t index)
 		index <  ra->start + ra->size);
 }
 
+/* 每个打开的文件都对应一个file实例 */
 struct file {
 	/*
 	 * fu_list becomes invalid after file_free is called and queued via
@@ -790,6 +813,7 @@ struct file {
 	atomic_t		f_count;
 	unsigned int 		f_flags;
 	mode_t			f_mode;
+	/* 当前的文件位偏移量，不同进程可能访问同一文件，每进程的文件偏移量与打开的文件对象关联 */
 	loff_t			f_pos;
 	struct fown_struct	f_owner;
 	unsigned int		f_uid, f_gid;
@@ -807,6 +831,16 @@ struct file {
 	struct list_head	f_ep_links;
 	spinlock_t		f_ep_lock;
 #endif /* #ifdef CONFIG_EPOLL */
+	/*
+	 * 进程虚拟地址空间最初都是未直接与任何页框关联，直到等到访问时才通过缺页异常处理程序按需调页
+	 * 同理，一个被打开的文件，并不是立马将文件的所有内容均读取到内存中进行操作，而只是最常用的部分才与页框关联
+	 * 因此，文件对象file实例必须通过某种机制关联到文件系统在硬盘上存储文件内容的区域，方便后续能按需从后备存储器读取数据
+	 * 内核便是利用address_space数据结构实现文件对象与磁盘文件区域的关联
+	 * address_space形成了一个辅助层，将映射的数据表示为连续的线性区域，提供给内存管理子系统
+	 *
+	 * 一个磁盘文件对应一个文件结点inode，但可被打开多次，每次创建一个文件对象file
+	 * inode才可用于访问实际存储文件数据的后备存储器，而file->f_mapping只是在文件打开时设置到inode->i_mapping
+	 */
 	struct address_space	*f_mapping;
 };
 extern spinlock_t files_lock;
@@ -976,20 +1010,28 @@ extern spinlock_t sb_lock;
 
 #define sb_entry(list)	list_entry((list), struct super_block, s_list)
 #define S_BIAS (1<<30)
+/* VFS虚拟文件系统中的超级块对象 */
 struct super_block {
+	/* 所有超级块对象都以双向循环链表的形式链接在一起 */
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
+	/* 以字节为单位的块大小 */
 	unsigned long		s_blocksize;
+	/* 以位为单位的块大小 */
 	unsigned char		s_blocksize_bits;
 	unsigned char		s_dirt;
+	/* 文件的最长长度 */
 	unsigned long long	s_maxbytes;	/* Max file size */
+	/* 超级块所属文件系统类型 */
 	struct file_system_type	*s_type;
+	/* 超级块方法，读取、写会inode元数据等 */
 	const struct super_operations	*s_op;
 	struct dquot_operations	*dq_op;
  	struct quotactl_ops	*s_qcop;
 	const struct export_operations *s_export_op;
 	unsigned long		s_flags;
 	unsigned long		s_magic;
+	/* 文件系统根目录的目录项对象 */
 	struct dentry		*s_root;
 	struct rw_semaphore	s_umount;
 	struct mutex		s_lock;
@@ -1002,6 +1044,7 @@ struct super_block {
 #endif
 	struct xattr_handler	**s_xattr;
 
+	/* 每文件系统的双向循环链表，包含文件系统的每个索引结点对象 */
 	struct list_head	s_inodes;	/* all inodes */
 	struct list_head	s_dirty;	/* dirty inodes */
 	struct list_head	s_io;		/* parked for writeback */
@@ -1019,6 +1062,10 @@ struct super_block {
 
 	char s_id[32];				/* Informational name */
 
+	/*
+	 * 指向属于具体文件系统的超级块信息，例如Ext4文件系统的struct ext4_sb_info
+	 * 包含与虚拟文件系统无关但与具体文件系统相关的数据，如磁盘分配位掩码
+	 */
 	void 			*s_fs_info;	/* Filesystem private info */
 
 	/*
@@ -1403,9 +1450,12 @@ static inline void file_accessed(struct file *file)
 
 int sync_inode(struct inode *inode, struct writeback_control *wbc);
 
+/* 每个注册的文件系统都用一个类型为file_system_type的对象表示 */
 struct file_system_type {
+	/* 文件系统名 */
 	const char *name;
 	int fs_flags;
+	/* 读取文件系统超级块的方法 */
 	int (*get_sb) (struct file_system_type *, int,
 		       const char *, void *, struct vfsmount *);
 	void (*kill_sb) (struct super_block *);

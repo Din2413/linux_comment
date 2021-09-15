@@ -55,6 +55,7 @@
  * Special inodes numbers
  */
 #define	EXT4_BAD_INO		 1	/* Bad blocks inode */
+/* ext4文件系统root根目录的inode号 */
 #define EXT4_ROOT_INO		 2	/* Root inode */
 #define EXT4_BOOT_LOADER_INO	 5	/* Boot loader inode */
 #define EXT4_UNDEL_DIR_INO	 6	/* Undelete directory inode */
@@ -499,6 +500,7 @@ do {									       \
 /*
  * Structure of the super block
  */
+/* ext4文件系统超级块对象，与磁盘存储信息一一对应 */
 struct ext4_super_block {
 /*00*/	__le32	s_inodes_count;		/* Inodes count */
 	__le32	s_blocks_count_lo;	/* Blocks count */

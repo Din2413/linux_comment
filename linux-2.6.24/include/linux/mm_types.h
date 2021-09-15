@@ -132,13 +132,26 @@ struct vm_area_struct {
 	 * linkage to the list of like vmas hanging off its node, or
 	 * linkage of vma in the address_space->i_mmap_nonlinear list.
 	 */
+	/*
+	 * 用于链接建立文件某一区域与该区域被映射的所有虚拟地址空间之间的关联的优先查找树
+	 *
+	 * 1、当文件的某一区域只存在一个虚拟地址空间与之映射时，直接将prio_tree_node作为树结点挂入
+	 * 2、当文件的某一区域存在多个虚拟地址空间与之映射时，则将一个vm_set对象作为树结点挂入，
+	 * 此时vm_set.head字段指向映射该文件区域的虚拟地址区列表的首个对象，整个列表再由各个地址区的vm_set.list串接
+	 */
 	union {
 		struct {
+			/* list、parent 和 prio_tree_node占用内存完全重叠，可通过parent != NULL判断是否已经在优先查找树中 */
 			struct list_head list;
 			void *parent;	/* aligns with prio_tree_node parent */
 			struct vm_area_struct *head;
 		} vm_set;
 
+		/*
+		 * 优先查找树结点
+		 * 当要查找映射文件中某一区域的所有虚拟地址区间时,
+		 * 可直接通过遍历vm_file->f_mapping->i_mmap优先查找树实现
+		 */
 		struct raw_prio_tree_node prio_tree_node;
 	} shared;
 
@@ -155,8 +168,10 @@ struct vm_area_struct {
 	struct vm_operations_struct * vm_ops;
 
 	/* Information about our backing store: */
+	/* 指定了文件映射的偏移量，单位为PAGE_SIZE，该值用于只映射了文件部分内容时，如果映射整个文件，则值为0 */
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units, *not* PAGE_CACHE_SIZE */
+	/* 指向file实例，描述一个被映射的文件，如果映射的对象不是文件，则为NULL指针 */
 	struct file * vm_file;		/* File we map to (can be NULL). */
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 	unsigned long vm_truncate_count;/* truncate_count or restart_addr */

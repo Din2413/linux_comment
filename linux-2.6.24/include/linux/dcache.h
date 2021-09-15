@@ -79,6 +79,11 @@ struct dcookie_struct;
 
 #define DNAME_INLINE_LEN_MIN 36
 
+/*
+ * 目录项对象，路径名中的每个分量，内核都为其创建一个目录项对象
+ * 如：路径/tmp/test，内核为根目录'/'创建一个一级目录项对象，为tmp创建一个二级目录项对象，为test创建一个三级目录项对象
+ * 因此，一个磁盘文件只对应一个inode索引结点对象，但会依据硬链接数目创建相对应的目录项对象，每个目录项对象指向不同路径的硬链接
+ */
 struct dentry {
 	atomic_t d_count;
 	unsigned int d_flags;		/* protected by d_lock */
@@ -90,7 +95,9 @@ struct dentry {
 	 * so they all fit in a cache line.
 	 */
 	struct hlist_node d_hash;	/* lookup hash list */
+	/* 目录树形结构，指向父目录项对象 */
 	struct dentry *d_parent;	/* parent directory */
+	/* 文件名 */
 	struct qstr d_name;
 
 	struct list_head d_lru;		/* LRU list */
@@ -101,6 +108,7 @@ struct dentry {
 		struct list_head d_child;	/* child of parent list */
 	 	struct rcu_head d_rcu;
 	} d_u;
+	/* 目录树形结构，指向子目录项对象链表的头 */
 	struct list_head d_subdirs;	/* our children */
 	struct list_head d_alias;	/* inode alias list */
 	unsigned long d_time;		/* used by d_revalidate */

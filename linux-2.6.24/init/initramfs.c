@@ -541,6 +541,14 @@ skip:
 
 #endif
 
+/*
+ * 初始化虚拟根文件系统
+ * 虚拟根文件系统包括三种类型，即initramfs、cpio-initrd和image-initrd
+ *
+ * initramfs在编译内核的同时被编译并与内核连接成一个文件，被链接到地址_initramfs_start处
+ * 与内核同时被bootloader加载到ram中，而initrd是另外单独编译生成的一个独立文件，由bootload
+ * 单独加载到ram中内核空间外的地址initrd_start
+ */
 static int __init populate_rootfs(void)
 {
 	char *err = unpack_to_rootfs(__initramfs_start,

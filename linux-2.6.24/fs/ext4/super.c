@@ -774,10 +774,15 @@ static struct quotactl_ops ext4_qctl_operations = {
 };
 #endif
 
+/* ext4文件系统的超级块操作方法 */
 static const struct super_operations ext4_sops = {
+	/* 为索引结点对象分配内存空间 */
 	.alloc_inode	= ext4_alloc_inode,
+	/* 释放索引结点对象占据的内存空间 */
 	.destroy_inode	= ext4_destroy_inode,
+	/* 磁盘读取索引结点元数据并初始化以参数传递的索引结点对象 */
 	.read_inode	= ext4_read_inode,
+	/* 用以参数传递的索引结点对象的内容更新磁盘的索引结点元数据 */
 	.write_inode	= ext4_write_inode,
 	.dirty_inode	= ext4_dirty_inode,
 	.delete_inode	= ext4_delete_inode,
@@ -1903,6 +1908,7 @@ static int ext4_fill_super (struct super_block *sb, void *data, int silent)
 	/*
 	 * set up enough so that it can read an inode
 	 */
+	/* 初始化ext4文件系统超级块操作方法 */
 	sb->s_op = &ext4_sops;
 	sb->s_export_op = &ext4_export_ops;
 	sb->s_xattr = ext4_xattr_handlers;
@@ -1983,6 +1989,7 @@ static int ext4_fill_super (struct super_block *sb, void *data, int silent)
 	 * so we can safely mount the rest of the filesystem now.
 	 */
 
+	/* 读取root根目录的inode元数据 */
 	root = iget(sb, EXT4_ROOT_INO);
 	sb->s_root = d_alloc_root(root);
 	if (!sb->s_root) {
@@ -3030,9 +3037,14 @@ static int __init init_ext4_fs(void)
 	int err = init_ext4_xattr();
 	if (err)
 		return err;
+	/* 创建struct ext4_inode_info的缓存 */
 	err = init_inodecache();
 	if (err)
 		goto out1;
+	/*
+	 * 注册ext4文件系统，只是将file_system_type对象插入单链表中
+	 * 只有等到文件系统mount时，才会回调get_sb()初始化文件系统的superblock超级块对象】
+	 */
 	err = register_filesystem(&ext4dev_fs_type);
 	if (err)
 		goto out;

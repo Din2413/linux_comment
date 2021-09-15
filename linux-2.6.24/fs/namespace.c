@@ -1092,6 +1092,7 @@ static int do_new_mount(struct nameidata *nd, char *type, int flags,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
+	/* 处理实际的安装操作并返回一个新安装文件系统描述符的地址 */
 	mnt = do_kern_mount(type, flags, name, data);
 	if (IS_ERR(mnt))
 		return PTR_ERR(mnt);
@@ -1442,15 +1443,19 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (retval)
 		goto dput_out;
 
+	/* 重安装文件系统，目的通常是改变超级块对象和已安装文件系统对象的安装标志 */
 	if (flags & MS_REMOUNT)
 		retval = do_remount(&nd, flags & ~MS_REMOUNT, mnt_flags,
 				    data_page);
+	/* 创建一个“绑定安装”，已安装文件系统在系统目录树的另一个文件或目录可见 */
 	else if (flags & MS_BIND)
 		retval = do_loopback(&nd, dev_name, flags & MS_REC);
 	else if (flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
 		retval = do_change_type(&nd, flags);
+	/* 改变已安装文件系统的安装点 */
 	else if (flags & MS_MOVE)
 		retval = do_move_mount(&nd, dev_name);
+	/* 安装一个特殊文件系统或存放在磁盘分区中的普通文件系统 */
 	else
 		retval = do_new_mount(&nd, type_page, flags, mnt_flags,
 				      dev_name, data_page);

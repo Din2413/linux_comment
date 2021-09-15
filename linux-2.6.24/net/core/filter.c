@@ -36,6 +36,12 @@
 #include <asm/unaligned.h>
 #include <linux/filter.h>
 
+/*
+ * BPF(Berkeley Packet Filter, 伯克利数据包过滤器)内核实现
+ * 具体可参见：1992年Steven McCanne and Van Jacobson的论文
+ * 《The BSD Packet Filter: A New Architecture for User-level Packet Capture》
+ */
+
 /* No hurry in this branch */
 static void *__load_pointer(struct sk_buff *skb, int k)
 {
