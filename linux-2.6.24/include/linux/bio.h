@@ -71,6 +71,10 @@ typedef void (bio_destructor_t) (struct bio *);
  * main unit of I/O for the block layer and lower layers (ie drivers and
  * stacking drivers)
  */
+/*
+ * 当内核以文件系统、虚拟内存子系统或者系统调用的形式决定从块I/O设备输入、输出块数据时，将结合一个bio结构，用来描述这个操作
+ * 该结构被传递给I/O代码，代码会把它合并到一个已经存在的request结构中，或者根据需要再创建一个新的request结构
+ */
 struct bio {
 	sector_t		bi_sector;	/* device address in 512 byte
 						   sectors */

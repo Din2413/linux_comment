@@ -63,7 +63,7 @@ static inline int get_pageblock_migratetype(struct page *page)
  * 链表内空闲页框块大小相同，且为2的倍数
  *
  * Linux 内核2.6.24之前，free_area只采用一个链表管理空闲页框块
- * 但由于，伙伴系统仅仅寄托于内存释放时的合并操作而不考虑分配时的策略，
+ * 但由于，伙伴系统的碎片处理仅仅寄托于内存释放时的合并操作而不考虑分配时的策略，
  * 即伙伴系统的碎片防止机制寄托于内存使用者会及时释放掉内存的情况，
  * 当系统长期运行，或使用者长期不释放内存时，物理内存依然会产生很多碎片。
  *
@@ -629,13 +629,13 @@ typedef struct pglist_data {
 	 * 一致性内存访问UMA中，只存在一个结点，所有zone成员均在node_zones中存放
 	 * 而对于非一致性内存访问UNMA而言，除本地结点，还可能存在多个远端内存结点
 	 * 本地内存结点并不会存放远端内存结点得管理区zone信息，但当本段结点分配内存失败时，
-	 * 其实可通过其他多端结点分配，因此引入zonelists概念将远端内存结点和本地内存结点统一挂在zonelist链表上
+	 * 其实可通过其他远端结点分配，因此引入zonelists概念将远端内存结点和本地内存结点统一挂在zonelist链表上
 	 *
 	 * NUMA中，MAX_ZONELISTS值为2*MAX_NR_ZONES，node_zonelists由两部分组成
 	 * 前半部分[0~MAX_NR_ZONES-1]包含所有内存结点管理区列表，当自身管理区不满足分配时可从备选列表尝试分配
 	 * 后半部分[MAX_NR_ZONES~MAX_ZONELISTS]只包含自身结点管理区列表
 	 *
-	 * UMA中，只存在一个内存结点，node_zonelists前后部分均只包含自身结点管理区列表
+	 * UMA中，MAX_ZONELISTS值则为MAX_NR_ZONES，node_zonelists只包含后半部分的自身结点管理区列表
 	 */
 	struct zonelist node_zonelists[MAX_ZONELISTS];
 	/* 该结点划分的管理区个数 */
