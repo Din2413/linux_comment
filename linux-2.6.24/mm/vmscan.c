@@ -669,6 +669,7 @@ static int __isolate_lru_page(struct page *page, int mode)
 		return ret;
 
 	ret = -EBUSY;
+	/* 增加page引用计数 */
 	if (likely(get_page_unless_zero(page))) {
 		/*
 		 * Be careful not to clear PageLRU until after we're
@@ -1082,6 +1083,7 @@ force_reclaim_mapped:
 	lru_add_drain();
 	/* LRU链表需采用lru_lock自旋锁互斥保护，为提高执行效率，将nr_pages个页一并移动到l_hold链表上，而不是逐个判断是否满足inactive条件 */
 	spin_lock_irq(&zone->lru_lock);
+	/* 拆分lru链表时，对每一个拆分的page增加引用计数，防止page处理过程中被free，直到重新加入到目标lru链表后，由pagevec_release释放引用计数，并判断page引用计数是否为0需要free */
 	pgmoved = isolate_lru_pages(nr_pages, &zone->active_list,
 			    &l_hold, &pgscanned, sc->order, ISOLATE_ACTIVE);
 	zone->pages_scanned += pgscanned;
@@ -1113,6 +1115,7 @@ force_reclaim_mapped:
 	}
 
 	/* 将l_inactive链表页框移动到zone->inactive_list，表示为可回收页框 */
+	/* 引入pagever暂存器，累计一定数量page后统一处理，减少lru_lock锁定时间 */
 	pagevec_init(&pvec, 1);
 	pgmoved = 0;
 	spin_lock_irq(&zone->lru_lock);
@@ -1133,6 +1136,7 @@ force_reclaim_mapped:
 			pgmoved = 0;
 			if (buffer_heads_over_limit)
 				pagevec_strip(&pvec);
+			/* 释放isolate_lru_pages拆分lru链表时对page增加的引用计数，并判断page引用计数是否减少为0需要free，如果需要则执行page free动作 */
 			__pagevec_release(&pvec);
 			spin_lock_irq(&zone->lru_lock);
 		}
@@ -1159,6 +1163,8 @@ force_reclaim_mapped:
 			__mod_zone_page_state(zone, NR_ACTIVE, pgmoved);
 			pgmoved = 0;
 			spin_unlock_irq(&zone->lru_lock);
+			/* 释放isolate_lru_pages拆分lru链表时对page增加的引用计数，并判断page引用计数是否减少为0需要free，如果需要则执行page free动作 */
+			/* 这块free的页框不会算入kswap回收 */
 			__pagevec_release(&pvec);
 			spin_lock_irq(&zone->lru_lock);
 		}

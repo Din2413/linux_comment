@@ -1504,6 +1504,7 @@ static inline int wake_idle(int cpu, struct task_struct *p)
  *
  * returns failure only if the task is already active.
  */
+/* 唤醒等待/休眠状态进程，唤醒时需考虑SMP多处理器系统的负载均衡 */
 static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 {
 	int cpu, orig_cpu, this_cpu, success = 0;
@@ -1516,7 +1517,9 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	int new_cpu;
 #endif
 
+	/* 禁用本地中断，并获得最后执行进程的CPU（可能不同于本地CPU）所拥有的运行队列rq的锁 */
 	rq = task_rq_lock(p, &flags);
+	/* 检查进程的状态p->state是否属于被当作参数传递给函数的状态掩码state（允许唤醒的进程当前状态） */
 	old_state = p->state;
 	if (!(old_state & state))
 		goto out;
@@ -1524,6 +1527,10 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	if (p->se.on_rq)
 		goto out_running;
 
+	/*
+	 * orig_cpu表示最后执行进程的CPU，this_cpu表示此次唤醒进程的CPU
+	 * 两个CPU可能不同，不同CPU的运行队列不同
+	 */
 	cpu = task_cpu(p);
 	orig_cpu = cpu;
 	this_cpu = smp_processor_id();
@@ -1535,11 +1542,13 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	new_cpu = cpu;
 
 	schedstat_inc(rq, ttwu_count);
+	/* 最后运行进程的CPU与唤醒进程的本地CPU相同，则无需考虑在不同CPU的运行队列之间迁移 */
 	if (cpu == this_cpu) {
 		schedstat_inc(rq, ttwu_local);
 		goto out_set_cpu;
 	}
 
+	/* 在本地CPU的调度层级关系中，寻找首个同时包含本地CPU和最后执行进程的CPU的调度域，保证负载迁移成本最低 */
 	for_each_domain(this_cpu, sd) {
 		if (cpu_isset(cpu, sd->span)) {
 			schedstat_inc(sd, ttwu_wake_remote);
@@ -1548,6 +1557,7 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 		}
 	}
 
+	/* 唤醒的本地CPU不在进程P允许运行的CPU列表内，则无需执行迁移动作，而是直接放回最后执行该进程的CPU运行队列中 */
 	if (unlikely(!cpu_isset(this_cpu, p->cpus_allowed)))
 		goto out_set_cpu;
 
