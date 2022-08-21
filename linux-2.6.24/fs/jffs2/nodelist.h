@@ -156,6 +156,7 @@ static inline struct jffs2_inode_cache *jffs2_raw_ref_to_ic(struct jffs2_raw_nod
    dirent nodes) would take more space than this does. We also keep
    a pointer to the first physical node which is part of this inode, too.
 */
+/* jffs2文件系统提供每个文件极其数据之间映射机制的数据结构 */
 struct jffs2_inode_cache {
 	/* First part of structure is shared with other objects which
 	   can terminate the raw node refs' next_in_ino list -- which
@@ -165,6 +166,11 @@ struct jffs2_inode_cache {
 		temporary lists of dirents, and later must be set to
 		NULL to mark the end of the raw_node_ref->next_in_ino
 		chain. */
+	/**
+	 * 文件可能由多个数据实体组成，数据实体由jffs2_raw_node_ref描述，
+	 * 同一个文件的多个jffs2_raw_node_ref由其成员next_in_ino组成循环链表，
+	 * 链表首部有jffs2_inode_cache的nodes域指向
+	 */
 	struct jffs2_raw_node_ref *nodes;
 	uint8_t class;	/* It's used for identification */
 
@@ -172,11 +178,14 @@ struct jffs2_inode_cache {
 
 	uint8_t flags;
 	uint16_t state;
+	/* 文件在文件系统中唯一的索引节点号 */
 	uint32_t ino;
+	/* jffs2文件系统的所有inode_cache被组织在一个哈希表中，next用于组织冲突项的链表 */
 	struct jffs2_inode_cache *next;
 #ifdef CONFIG_JFFS2_FS_XATTR
 	struct jffs2_xattr_ref *xref;
 #endif
+	/* 文件的硬链接个数，挂载文件系统时会计算指向每个文件的目录项个数，赋值给nlink */
 	int nlink;
 };
 

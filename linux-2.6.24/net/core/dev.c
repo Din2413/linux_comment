@@ -4415,6 +4415,7 @@ static int __init net_dev_init(void)
 	if (netdev_kobject_init())
 		goto out;
 
+    /* 初始化网络处理函数散列表，用来处理接收到的不同协议簇报文 */
 	INIT_LIST_HEAD(&ptype_all);
 	for (i = 0; i < 16; i++)
 		INIT_LIST_HEAD(&ptype_base[i]);
@@ -4429,6 +4430,7 @@ static int __init net_dev_init(void)
 	 *	Initialise the packet receive queues.
 	 */
 
+    /* 初始化每CPU相关的接收队列 */
 	for_each_possible_cpu(i) {
 		struct softnet_data *queue;
 
@@ -4445,9 +4447,11 @@ static int __init net_dev_init(void)
 
 	dev_boot_phase = 0;
 
+    /* 在软中断系统中注册两个软中断，作为NAPI（中断+轮询）的下半部用于网络数据的发送和接收 */
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action, NULL);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action, NULL);
 
+    /* 在通知链表上注册一个回调函数，用来响应CPU热插拔时间，一旦接到通知，CPU输入队列中的包统一交由netif_rx()处理 */
 	hotcpu_notifier(dev_cpu_callback, 0);
 	dst_init();
 	dev_mcast_init();

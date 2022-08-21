@@ -574,6 +574,7 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		if (sk->sk_state != TCP_CLOSE)
 			goto out;
 
+		/* 进行连接操作，但连接需要三次握手，connect接口只完成发送SYN段过程，后续两次握手由协议栈完成 */
 		err = sk->sk_prot->connect(sk, uaddr, addr_len);
 		if (err < 0)
 			goto out;
@@ -588,8 +589,9 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		break;
 	}
 
+	/* 获取连接超时时间 */
 	timeo = sock_sndtimeo(sk, flags & O_NONBLOCK);
-
+	/* 半连接状态时，阻塞方式需等待直到连接完成或超时，非阻塞方式下则无需等待连接完成 */
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		/* Error code is set above */
 		if (!timeo || !inet_wait_for_connect(sk, timeo))
@@ -603,6 +605,7 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	/* Connection was closed by RST, timeout, ICMP error
 	 * or another process disconnected us.
 	 */
+	/* 连接建立失败 */
 	if (sk->sk_state == TCP_CLOSE)
 		goto sock_error;
 
@@ -898,6 +901,12 @@ static const struct proto_ops inet_sockraw_ops = {
 #endif
 };
 
+/**
+ * 一种协议族对应一个net_proto_family结构实例
+ * 不同协议族的实例在系统初始化时调用sock_register()注册到全局数组net_families[]中
+ *
+ * 套接口创建时，根据family协议族类型在net_families[]中搜索匹配的net_proto_family实例，并调用该接口的create成员函数创建套接口
+ */
 static struct net_proto_family inet_family_ops = {
 	.family = PF_INET,
 	.create = inet_create,
@@ -906,6 +915,14 @@ static struct net_proto_family inet_family_ops = {
 
 /* Upon startup we insert all the elements in inetsw_array[] into
  * the linked list inetsw.
+ */
+/**
+ * IPV4协议族中，一个传输层协议对应一个inet_protosw结构实例
+ * 该结构包含struct proto_ops和struct proto结构，前者用于套接口层映射到传输层，后者用于传输层映射到网络层
+ * 结构实例都定义在静态数组inetsw_array[]中，系统初始化时，根据每个接口的type成员，注册到一个全局的list_head结构数组inetsw[]中
+ * socket类型相同的inet_protosw结构在inetsw[]中以其对应的元素为链表头组成一个双向链表
+ *
+ * 在套接口创建时，根据type类型在inetsw[]中搜索匹配的inet_protosw实例，并将其proto_ops成员存储在socket结构的ops中，proto成员存储在对应传输控制块sock的sk_prot中
  */
 static struct inet_protosw inetsw_array[] =
 {

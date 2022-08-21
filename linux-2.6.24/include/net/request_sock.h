@@ -26,33 +26,50 @@ struct sk_buff;
 struct dst_entry;
 struct proto;
 
+/* 连接请求块的处理函数 */
 struct request_sock_ops {
 	int		family;
 	int		obj_size;
+	/* 创建分配连接请求块的高速缓存slab */
 	struct kmem_cache	*slab;
+	/* 发送SYN+ACK的函数指针 */
 	int		(*rtx_syn_ack)(struct sock *sk,
 				       struct request_sock *req,
 				       struct dst_entry *dst);
+	/* 发送ACK的函数指针 */
 	void		(*send_ack)(struct sk_buff *skb,
 				    struct request_sock *req);
+	/* 发送RST的函数指针 */
 	void		(*send_reset)(struct sock *sk,
 				      struct sk_buff *skb);
+	/* 析构函数，在释放连接请求块时调用 */
 	void		(*destructor)(struct request_sock *req);
 };
 
 /* struct request_sock - mini sock to represent a connection request
  */
+/**
+ * 用来构成inet_request_sock结构
+ * 主要描述对端的MSS、本端的接收窗口大小以及控制连接操作的信息，比如超时时间等
+ */
 struct request_sock {
 	struct request_sock		*dl_next; /* Must be first member! */
+	/* 客户端连接请求段中通告的MSS，如果无通告，则默认为RFC中建议的536 */
 	u16				mss;
+	/* 发送SYN+ACK段的次数，在达到系统设定的上限时，取消连接操作 */
 	u8				retrans;
 	u8				__pad;
+	/* 标识本端的最大通告窗口，在生成SYN+ACK段时计算该值 */
 	/* The following two fields can be easily recomputed I think -AK */
 	u32				window_clamp; /* window clamp at creation time */
+	/* 标识在连接建立时本端的接收窗口大小，在生成SYN+ACK段时计算该值 */
 	u32				rcv_wnd;	  /* rcv_wnd offered first time */
 	u32				ts_recent;
+	/* 服务端收到连接请求，并发送SYN+ACK段作为应答后，等待客户端确认的超时时间，一旦超时，会重新发送SYN+ACK段 */
 	unsigned long			expires;
+	/* 处理连接请求的函数指针表 */
 	const struct request_sock_ops	*rsk_ops;
+	/* 指向对应状态的传输控制块，在连接建立之前无效，三次握手后会创建对应的传输控制块，而此时连接请求块也完成了历史使命，调用accept将该请求块取走并释放 */
 	struct sock			*sk;
 	u32				secid;
 	u32				peer_secid;
@@ -86,13 +103,26 @@ extern int sysctl_max_syn_backlog;
  * @max_qlen_log - log_2 of maximal queued SYNs/REQUESTs
  */
 struct listen_sock {
+	/* 实际分配用来保存SYN请求连接的request_sock结构数组的长度，其值为nr_table_entries以2为底的对数 */
 	u8			max_qlen_log;
 	/* 3 bytes hole, try to use */
+	/* 当前连接请求块数目 */
 	int			qlen;
+	/**
+	 * 当前未重传过SYN+ACK段的请求块数目
+	 * 如果每次建立链接都很顺利，三次握手的段没有重传，则qlen_young和qlenshi一致的，有SYN+ACK段重传时会递减
+	 */
 	int			qlen_young;
+	/**
+	 * 用来记录连接建立定时器处理函数下次被激活时需处理的连接请求块散列表入口
+	 * 在本次处理结束时将当前的入口保存到该字段中，下次处理时就从该入口开始处理
+	 */
 	int			clock_hand;
+	/* 用来计算SYN请求块散列表键值的随机数，该值在reqsk_queue_alloc()中随机生成 */
 	u32			hash_rnd;
+	/* 实际分配用来保存SYN请求连接的request_sock结构数组的长度 */
 	u32			nr_table_entries;
+	/* 指向未完成连接请求块request_sock的散列表，在listen系统调用中创建 */
 	struct request_sock	*syn_table[0];
 };
 
@@ -112,12 +142,25 @@ struct listen_sock {
  * don't need to grab this lock in read mode too as rskq_accept_head. writes
  * are always protected from the main sock lock.
  */
+/**
+ * 保存未完成连接和已完成但未被accept的TCP请求控制块
+ * 1、当服务端进入LISTEN状态后，便可接收客户端的连接请求；
+ * 2、接收到客户端的SYN请求后，服务端发送SYN+ACK回应，并创建请求控制块（保存双方初始序号等）链入listen_opt的syn_table散列表中；
+ * 3、再次接收到客户端的ACK回应后，才为连接真正创建一个TCP传输控制块，并挂载到连接请求块的sk成员上，同时将已经完成连接的请求块移动到rskq_qccept_head队列中，等到accept调用；
+ * 4、accept系统调用从rskq_accept_head队列中取走请求传输控制块，与套接口相关联后释放该连接请求块;
+ */
 struct request_sock_queue {
+	/* 指向已完成连接但未被accept的连接请求块链表的头部和尾部 */
 	struct request_sock	*rskq_accept_head;
 	struct request_sock	*rskq_accept_tail;
 	rwlock_t		syn_wait_lock;
 	u8			rskq_defer_accept;
 	/* 3 bytes hole, try to pack */
+	/**
+	 * 保存连接状态中的连接请求块
+	 * 在TCP传输控制块创建之初，listen_opt是未被分配的，即值为NULL
+	 * listen系统调用使TCP进入LISTEN状态，同时还创建listen_opt为SYN_RECV状态的请求连接控制块分配空间
+	*/
 	struct listen_sock	*listen_opt;
 };
 

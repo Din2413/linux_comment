@@ -280,11 +280,16 @@ static int m25p80_read(struct mtd_info *mtd, loff_t from, size_t len,
 	 */
 
 	/* Set up the write data buffer. */
+	/**
+	 * Flash读取命令，仅支持3字节地址模式（最大16M），不支持4字节地址模式（32M）
+	 * 首字节为读取命令，后三字节为读取地址
+	 */
 	flash->command[0] = OPCODE_READ;
 	flash->command[1] = from >> 16;
 	flash->command[2] = from >> 8;
 	flash->command[3] = from;
 
+	/* 通过SPI总线将message发送给Flash设备，并返回实际读取数据长度 */
 	spi_sync(flash->spi, &m);
 
 	*retlen = m.actual_length - sizeof(flash->command);
@@ -340,6 +345,10 @@ static int m25p80_write(struct mtd_info *mtd, loff_t to, size_t len,
 	write_enable(flash);
 
 	/* Set up the opcode in the write buffer. */
+	/**
+	 * Flash写入命令，仅支持3字节地址模式（最大16M），不支持4字节地址模式（32M）
+	 * 首字节为命令，后三字节为写入地址
+	 */
 	flash->command[0] = OPCODE_PP;
 	flash->command[1] = to >> 16;
 	flash->command[2] = to >> 8;
@@ -428,6 +437,7 @@ struct flash_info {
  * more flash chips.  This current list focusses on newer chips, which
  * have been converging on command sets which including JEDEC ID.
  */
+/* m25p80通用驱动支持的NOR Flash列表 */
 static struct flash_info __devinitdata m25p_data [] = {
 
 	/* Atmel -- some are (confusingly) marketed as "DataFlash" */
@@ -580,6 +590,7 @@ static int __devinit m25p_probe(struct spi_device *spi)
 	else
 		flash->mtd.name = spi->dev.bus_id;
 
+	/* MTD原始设备类型、读/写/擦函数 */
 	flash->mtd.type = MTD_NORFLASH;
 	flash->mtd.writesize = 1;
 	flash->mtd.flags = MTD_CAP_NORFLASH;
@@ -676,6 +687,11 @@ static int __devexit m25p_remove(struct spi_device *spi)
 }
 
 
+/**
+ * SPI NOR Flash通用驱动，通过spi_register_driver注册到spi总线上
+ * 当在spi总线上匹配到名称为“m25p80”的设备时调用probe完成探测和初始化（创建MTD设备）
+ * 当设备从spi总线移除时调用remove完成信息注销（删除MTD设备）
+ */
 static struct spi_driver m25p80_driver = {
 	.driver = {
 		.name	= "m25p80",

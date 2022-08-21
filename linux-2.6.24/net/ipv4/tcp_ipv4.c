@@ -102,6 +102,14 @@ static int tcp_v4_do_calc_md5_hash(char *md5_hash, struct tcp_md5sig_key *key,
 				   int tcplen);
 #endif
 
+/**
+ * TCP两端交互过程中，TCP存在多种状态
+ * CLOSE、LISTEN、SYN_SEND、SYN_RECV、ESTABLISHED、FIN_WAIT1、FIN_WAIT2、TIME_WAIT、CLOSE_WAIT、CLOSING等
+ *
+ * 为了能对不同状态的传输控制块进行合理管理和访问，TCP根据状态将传输控制块存储在多个不同的散列表中
+ *
+ * inet_hashinfo结构的全局变量tcp_hashinfo对所有的散列表进行集中管理
+ */
 struct inet_hashinfo __cacheline_aligned tcp_hashinfo = {
 	.lhash_lock  = __RW_LOCK_UNLOCKED(tcp_hashinfo.lhash_lock),
 	.lhash_users = ATOMIC_INIT(0),
@@ -1258,6 +1266,9 @@ static struct timewait_sock_ops tcp_timewait_sock_ops = {
 	.twsk_destructor= tcp_twsk_destructor,
 };
 
+/**
+ * 服务端用来处理客户端连接请求（LISTEN状态下接收SYN端）的函数
+ */
 int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 {
 	struct inet_request_sock *ireq;
@@ -1282,8 +1293,16 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	 * limitations, they conserve resources and peer is
 	 * evidently real one.
 	 */
+	/* SYN_RECV状态的连接请求队列已满 */
 	if (inet_csk_reqsk_queue_is_full(sk) && !isn) {
 #ifdef CONFIG_SYN_COOKIES
+		/**
+		 * 是否打开SYN Cookies功能
+		 * SYN Cookies开启后，服务端接收到SYN段并返回SYN+ACK时，不分配请求控制块，而是根据这个SYN包计算一个cookie值，并将该值作为返回的SYN+ACK包的初始序列号
+		 * 当客户端返回ACK包时，根据包头信息计算cookie，与返回的确认序列号（初始序列号+1）进行对比，如果相同，则是一个正常的连接，分配资源并建立连接
+		 *
+		 * 由上可知，SYN Cookies是专门用来防范SYN Flood的一种手段
+		 */
 		if (sysctl_tcp_syncookies) {
 			want_cookie = 1;
 		} else
@@ -1296,9 +1315,15 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	 * clogging syn queue with openreqs with exponentially increasing
 	 * timeout.
 	 */
+	/**
+	 * 三次握手已完成但未accept的连接请求已达到后备队列上限
+	 * 且至少存在一个握手过程中没有重传过的连接请求时，直接丢弃当前请求
+	 * (应用层未及时接收请求，且短时内已存在新连接请求，避免耗费资源，直接丢弃不处理)
+	 */
 	if (sk_acceptq_is_full(sk) && inet_csk_reqsk_queue_young(sk) > 1)
 		goto drop;
 
+	/* 创建连接请求块，并指定连接请求处理函数集为tcp_request_sock_ops，包含syn+ack、rst、ack等发送函数 */
 	req = reqsk_alloc(&tcp_request_sock_ops);
 	if (!req)
 		goto drop;
@@ -1311,6 +1336,7 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	tmp_opt.mss_clamp = 536;
 	tmp_opt.user_mss  = tcp_sk(sk)->rx_opt.user_mss;
 
+	/* 处理客户端连接请求发送的SYN段的TCP选项，如：MSS最大分片大小、滑动窗口扩大因子、时间戳选项等 */
 	tcp_parse_options(skb, &tmp_opt, 0);
 
 	if (want_cookie) {
@@ -1318,6 +1344,9 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 		tmp_opt.saw_tstamp = 0;
 	}
 
+	/**
+	 * 存在时间戳选项（saw_tstamp为1），但未携带发送时间戳（tsval为0），则清除时间戳选项标志
+	 */
 	if (tmp_opt.saw_tstamp && !tmp_opt.rcv_tsval) {
 		/* Some OSes (unknown ones, but I see them on web server, which
 		 * contains information interesting only for windows'
@@ -1392,15 +1421,23 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 			goto drop_and_free;
 		}
 
+		/* 计算SYN+ACK段的初始序列号 */
 		isn = tcp_v4_init_sequence(skb);
 	}
+	/* 新建连接的服务端起始序列号 */
 	tcp_rsk(req)->snt_isn = isn;
 
+	/* 服务端回应客户端连接请求SYN段的SYN+ACK段，并将其封装在IP数据包中发送给客户端 */
 	if (tcp_v4_send_synack(sk, req, dst))
 		goto drop_and_free;
 
+	/* 开启SYN Cookies功能则直接是否连接请求块，避免存储浪费资源 */
 	if (want_cookie) {
 		reqsk_free(req);
+	/**
+	 * 否则将连接请求块链入接收连接请求的传输控制块的SYN_RECV状态的连接请求队列中
+	 * 如果是首次接收连接请求，则复位该传输控制块的连接建立定时器的超时时间间隔为TCP_TIMEOUT_INIT（超时重发SYN+ACK）
+	 */
 	} else {
 		inet_csk_reqsk_queue_hash_add(sk, req, TCP_TIMEOUT_INIT);
 	}
@@ -1417,6 +1454,9 @@ drop:
  * The three way handshake has completed - we got a valid synack -
  * now create the new socket.
  */
+/**
+ * 完成三次握手，为新连接创建一个传输控制块
+ */
 struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 				  struct request_sock *req,
 				  struct dst_entry *dst)
@@ -1429,6 +1469,7 @@ struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 	struct tcp_md5sig_key *key;
 #endif
 
+	/* 等待accept的后备队列数量是否已达上限 */
 	if (sk_acceptq_is_full(sk))
 		goto exit_overflow;
 
@@ -1498,15 +1539,26 @@ static struct sock *tcp_v4_hnd_req(struct sock *sk, struct sk_buff *skb)
 	struct sock *nsk;
 	struct request_sock **prev;
 	/* Find possible connection requests. */
+	/* 从SYN_RECV状态的散列表中查找连接请求块 */
 	struct request_sock *req = inet_csk_search_req(sk, &prev, th->source,
 						       iph->saddr, iph->daddr);
+
+	/**
+	 * 如果连接请求块存在，表明连接还未建立完成，对半连接状态的数据包接收进行处理（可能是ACK段、也可能是SYN+ACK段丢失时SYN段超时重传）
+	 * 如果连接建立成功，则返回新创建的“子”传输控制块，否则返回NULL，由上级丢弃数据包并结束处理
+	 */
 	if (req)
 		return tcp_check_req(sk, skb, req, prev);
 
+	/**
+	 * 如果连接请求块不存在，则可能服务段还未创建连接请求块或连接已建立完成
+	 * 则从tcp_hashinfo散列表中查找是否存在对应的传输控制块，如果存在表明连接已建立完成
+	 */
 	nsk = inet_lookup_established(&tcp_hashinfo, iph->saddr, th->source,
 				      iph->daddr, th->dest, inet_iif(skb));
 
 	if (nsk) {
+		/* 存在“子”传输控制块，且不处于TIME_WAIT状态 */
 		if (nsk->sk_state != TCP_TIME_WAIT) {
 			bh_lock_sock(nsk);
 			return nsk;
@@ -1522,10 +1574,14 @@ static struct sock *tcp_v4_hnd_req(struct sock *sk, struct sk_buff *skb)
 	return sk;
 }
 
+/**
+ * TCP段接收校验初始化，对伪首部进行校验和计算
+ */
 static __sum16 tcp_v4_checksum_init(struct sk_buff *skb)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 
+	/* 如果TCP包本身的校验已经由硬件完成，则只对伪首部进行校验 */
 	if (skb->ip_summed == CHECKSUM_COMPLETE) {
 		if (!tcp_v4_check(skb->len, iph->saddr,
 				  iph->daddr, skb->csum)) {
@@ -1534,9 +1590,11 @@ static __sum16 tcp_v4_checksum_init(struct sk_buff *skb)
 		}
 	}
 
+	/* 对于用软件完成校验和的操作，首先生成伪首部的部分累加和 */
 	skb->csum = csum_tcpudp_nofold(iph->saddr, iph->daddr,
 				       skb->len, IPPROTO_TCP, 0);
 
+	/* 如果全长不超过76B的TCP包，则直接进行伪首部和全包校验 */
 	if (skb->len <= 76) {
 		return __skb_checksum_complete(skb);
 	}
@@ -1566,6 +1624,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 		goto discard;
 #endif
 
+	/* 传输控制块状态为ESTABLISHED连接已建立 */
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
 		TCP_CHECK_TIMER(sk);
 		if (tcp_rcv_established(sk, skb, tcp_hdr(skb), skb->len)) {
@@ -1579,11 +1638,14 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	if (skb->len < tcp_hdrlen(skb) || tcp_checksum_complete(skb))
 		goto csum_err;
 
+	/* 传输控制块状态为TCP_LISTEN监听连接请求 */
 	if (sk->sk_state == TCP_LISTEN) {
+		/* 处理三次握手中最后一次握手的ACK段 */
 		struct sock *nsk = tcp_v4_hnd_req(sk, skb);
 		if (!nsk)
 			goto discard;
 
+		/* 返回的传输控制块不是输入的侦听传输控制块，则说明建立连接成功，初始化“子”传输控制块 */
 		if (nsk != sk) {
 			if (tcp_child_process(sk, nsk, skb)) {
 				rsk = nsk;
@@ -1620,7 +1682,9 @@ csum_err:
 /*
  *	From tcp_input.c
  */
-
+/**
+ * 传输层TCP协议从网络层接收数据包的接口
+ */
 int tcp_v4_rcv(struct sk_buff *skb)
 {
 	const struct iphdr *iph;
@@ -1661,12 +1725,17 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	TCP_SKB_CB(skb)->flags	 = iph->tos;
 	TCP_SKB_CB(skb)->sacked	 = 0;
 
+	/**
+	 * 由数据包源ip地址、目的ip地址、源端口、目的端口等四元组信息从tcp_hashinfo中查找是否存在对应的传输控制块
+	 * 主要为established状态和listen状态的传输控制块，前者表明连接已经建立，后者表明存在服务端等待连接请求
+	 */
 	sk = __inet_lookup(&tcp_hashinfo, iph->saddr, th->source,
 			   iph->daddr, th->dest, inet_iif(skb));
 	if (!sk)
 		goto no_tcp_socket;
 
 process:
+	/* 如果TCP连接处于TIME_WAIT状态，则跳转道do_time_wait处理 */
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
@@ -1674,6 +1743,7 @@ process:
 		goto discard_and_relse;
 	nf_reset(skb);
 
+	/* 执行bpf伯克利数据包过滤 */
 	if (sk_filter(sk, skb))
 		goto discard_and_relse;
 
@@ -1681,6 +1751,7 @@ process:
 
 	bh_lock_sock_nested(sk);
 	ret = 0;
+	/* 传输控制块此时未被应用层占用，则接收处理数据包 */
 	if (!sock_owned_by_user(sk)) {
 #ifdef CONFIG_NET_DMA
 		struct tcp_sock *tp = tcp_sk(sk);
@@ -1694,6 +1765,7 @@ process:
 			if (!tcp_prequeue(sk, skb))
 			ret = tcp_v4_do_rcv(sk, skb);
 		}
+	/* 将数据包链入传输控制块的后备队列，等待后续处理 */
 	} else
 		sk_add_backlog(sk, skb);
 	bh_unlock_sock(sk);
@@ -1850,6 +1922,15 @@ static int tcp_v4_init_sock(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	skb_queue_head_init(&tp->out_of_order_queue);
+	/**
+	 * 初始化TCP传输控制块的定时器
+	 * 连接建立定时器、重传定时器、延时ACK定时器、持续定时器、保活定时器、FIN_WAIT_2定时器和TIEME_WAIT定时器
+	 * （为了提高效率，内核中只使用四个定时器来完成七个定时器的功能）
+	 * 1、tcp_keepalive_timer:连接建立定时器、保活定时器、FIN_WAIT_2定时器
+	 * 2、tcp_probe_timer:持续定时器（在对端通告接收窗口为0，阻止TCP继续发送数据时设定，用于避免对端窗口更新丢失导致发送一直等待的问题）
+	 * 3、tcp_writer_timer:重传定时器
+	 * 4、tcp_delack_timer:延时ACK定时器
+	 */
 	tcp_init_xmit_timers(sk);
 	tcp_prequeue_init(tp);
 

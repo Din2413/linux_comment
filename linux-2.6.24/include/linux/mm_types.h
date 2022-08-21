@@ -39,7 +39,11 @@ struct page {
 					 * updated asynchronously */
 	atomic_t _count;		/* Usage count, see below. */
 	union {
-		/* 物理页框所映射的页表项数量 */
+		/**
+		 * 存放引用页框的页表项数量
+		 * 计数器的起始值为-1，表示没有页表项引用改页框
+		 * 如果值为0，表示页是非共享的，如果值大于1，则表示页是共享的
+		 */
 		atomic_t _mapcount;	/* Count of ptes mapped in mms,
 					 * to show when page is mapped
 					 * & limit reverse map searches.
@@ -55,6 +59,18 @@ struct page {
 						 * indicates order in the buddy
 						 * system if PG_buddy is set.
 						 */
+		/**
+		 * 用于确定页是映射的还是匿名的
+		 *
+		 * 如果mapping字段为空，则该页属于交换高速缓存
+		 * 如果mapping字段非空，且最低位为1，则该页为匿名页，同时mapping字段中存放的是指向anon_vma描述符的指针
+		 * 	1、匿名线性区分配首个物理页帧时创建anon_vma；
+		 * 	2、再将线性区vma_area_struct挂入anon_vma的head双向链表，同时设置该页帧描述符page的mapping字段值为anon_vma的地址；
+		 * 	3、该匿名线性区后续分配物理页帧时，直接将对应页描述符page的mapping字段值设置为该anon_vma地址即可；
+		 * 	4、如果另一个进程需要引用该页框时，内核将第二个进程的匿名线性区插入该anon_vma数据结构的双向循环链表中；
+		 * 如果mapping字段非空，且最低位为0，则该页为映射页，同时mapping字段中存放的是指向对应文件的address_space对象指向
+		 * (指针的其实地址最少需要按4字节对齐，因此mapping字段的最低位可用作一个标志位来表示该字段的指针是指向address_space还是anon_vma)
+		 */
 		struct address_space *mapping;	/* If low bit clear, points to
 						 * inode address_space, or NULL.
 						 * If page mapped as anonymous
@@ -168,7 +184,10 @@ struct vm_area_struct {
 	struct vm_operations_struct * vm_ops;
 
 	/* Information about our backing store: */
-	/* 指定了文件映射的偏移量，单位为PAGE_SIZE，该值用于只映射了文件部分内容时，如果映射整个文件，则值为0 */
+	/**
+	 * 如果是匿名线性区，该字段是0或者vm_start/PAGE_SIZE
+	 * 如果是文件映射区，该字段为被映射文件的线性区偏移量
+	 */
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units, *not* PAGE_CACHE_SIZE */
 	/* 指向file实例，描述一个被映射的文件，如果映射的对象不是文件，则为NULL指针 */

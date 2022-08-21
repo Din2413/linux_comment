@@ -1155,6 +1155,8 @@ failed:
  * ALLOC_WMARK_LOW:表示分配内存块时仅在低水位及以上分配
  * ALLOC_WMARK_HIGH:表示分配内存块时仅在高水位及以上分配
  * ALLOC_HARDER:表示努力满足内存分配，一般设置__GFP_ATOMIC时会使用
+ * ALLOC_HIGH:表示调用者是高优先级的，一般设置__GFP_HIGH时会使用
+ * ALLOC_CPUSET:检查cpuset是否允许进程从某个内存节点分配页
  */
 #define ALLOC_NO_WATERMARKS	0x01 /* don't check watermarks at all */
 #define ALLOC_WMARK_MIN		0x02 /* use pages_min watermark */
@@ -1620,7 +1622,7 @@ rebalance:
 	 * 如果内存分配的内核控制路径不是中断处理程序或可延迟函数，
 	 * 并且试图回收页框(PF_MEMALLOC或TIF_MEMDIE标志被置位)，
 	 * 并且允许使用保留内存(__GFP_NOMEMALLOC标志未被置位)，
-	 * 则进一步降低要求，ALLOC_NO_WATERMARKS忽略水位线检查，对内存管理区执行第三次扫描
+	 * 则进一步降低要求，ALLOC_NO_WATERMARKS忽略水位线检查（可使用min水位线以下的内存页），对内存管理区执行第三次扫描
 	 */
 	if (((p->flags & PF_MEMALLOC) || unlikely(test_thread_flag(TIF_MEMDIE)))
 			&& !in_interrupt()) {
@@ -1631,6 +1633,7 @@ nofail_alloc:
 				zonelist, ALLOC_NO_WATERMARKS);
 			if (page)
 				goto got_pg;
+			/* __GFP_NOFAIL表示失败一直重试 */
 			if (gfp_mask & __GFP_NOFAIL) {
 				congestion_wait(WRITE, HZ/50);
 				goto nofail_alloc;
@@ -1644,7 +1647,7 @@ nofail_alloc:
 	if (!wait)
 		goto nopage;
 
-	/* 如果请求内存块的进程允许被阻塞，则主动检查是否可执行进程调度 */
+	/* 如果请求内存块的进程允许被阻塞，则主动检查是否可执行进程调度，等下次获得运行时再请求内存分配 */
 	cond_resched();
 
 	/* We now go into synchronous reclaim */
@@ -2544,6 +2547,15 @@ void build_all_zonelists(void)
 	 * made on memory-hotadd so a system can start with mobility
 	 * disabled and enable it later
 	 */
+	/**
+	 * 只有当物理内存足够大且每种迁移类型有足够多的物理页时，根据可移动性分组才有意义
+	 *
+	 * 全局变量page_group_by_mobility_disabled表示是否禁用根据可移动性分组
+	 * vm_total_pages是所有内存区域里面高水线以上的物理页总数
+	 * pageblock_order是按可移动性分组的阶数，pageblock_nr_pages是pageblock_order对应的页数
+	 *
+	 * 如果所有内存区域里面高水位先以上的物理页总数小于(pageblock_nr_pages * MIGRATE_TYPES)，那么禁止根据可移动性分组
+	 */
 	if (vm_total_pages < (pageblock_nr_pages * MIGRATE_TYPES))
 		page_group_by_mobility_disabled = 1;
 	else
@@ -2722,6 +2734,7 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 		 * the start are marked MIGRATE_RESERVE by
 		 * setup_zone_migrate_reserve()
 		 */
+		/* 内核初始化时，把所有页块初始化为可移动类型，其他迁移类型的页都是盗用产生的 */
 		if ((pfn & (pageblock_nr_pages-1)))
 			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
 

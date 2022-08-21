@@ -1347,6 +1347,7 @@ int jffs2_do_read_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f,
 	}
 	spin_unlock(&c->inocache_lock);
 
+	/* 文件描述符不存在且ino等于1，则为根目录，创建并加入哈希表（如：空flash首次挂载时） */
 	if (!f->inocache && ino == 1) {
 		/* Special case - no root inode on medium */
 		f->inocache = jffs2_alloc_inode_cache();

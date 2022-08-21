@@ -248,7 +248,6 @@ void jffs2_read_inode (struct inode *inode)
 	down(&f->sem);
 
 	ret = jffs2_do_read_inode(c, f, inode->i_ino, &latest_node);
-
 	if (ret) {
 		make_bad_inode(inode);
 		up(&f->sem);
@@ -466,6 +465,10 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 }
 
 
+/*
+ * 真正初始化VFS超计划super_block数据结构 
+ * 为flash上所有数据实体创建内核描述符jffs2_raw_node_ref、为所有文件创建内核描述符jffs2_inode_cache
+ */
 int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct jffs2_sb_info *c;
@@ -475,6 +478,7 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 
 	c = JFFS2_SB_INFO(sb);
 
+	/* nand flash 和 data flash必须开启writebuffer支持 */
 #ifndef CONFIG_JFFS2_FS_WRITEBUFFER
 	if (c->mtd->type == MTD_NANDFLASH) {
 		printk(KERN_ERR "jffs2: Cannot operate on NAND flash unless jffs2 NAND support is compiled in.\n");
@@ -486,6 +490,7 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 	}
 #endif
 
+	/* 挂载的mtd分区的大小、块数 */
 	c->flash_size = c->mtd->size;
 	c->sector_size = c->mtd->erasesize;
 	blocks = c->flash_size / c->sector_size;
@@ -493,17 +498,26 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 	/*
 	 * Size alignment check
 	 */
+	/* 若mtd分区未按sector对齐，jffs2占据的分区大小需按sector缩小对齐 */
 	if ((c->sector_size * blocks) != c->flash_size) {
 		c->flash_size = c->sector_size * blocks;
 		printk(KERN_INFO "jffs2: Flash size not aligned to erasesize, reducing to %dKiB\n",
 			c->flash_size / 1024);
 	}
 
+	/* jffs2挂载的mtd分区大小必须大于5个块，否则挂载失败 */
 	if (c->flash_size < 5*c->sector_size) {
 		printk(KERN_ERR "jffs2: Too few erase blocks (%d)\n", c->flash_size / c->sector_size);
 		return -EINVAL;
 	}
 
+	/**
+	 * jffs2将文件系统数据以节点的形式存储在闪存上
+	 * 每个节点都以固定格式的头部(2字节magic number、2字节节点类型、4字节节点总长度、4字节节点头部crc校验码)开始
+	 *
+	 * jffs2擦除一个擦写块后，要写入类型为CLEANMARKER的数据实体(节点总长度等于头部长度的节点)来标记擦除成功完成
+	 * (nor flash设备中CLEANMARKER是存放在块头部的，而nand flash设备存放在oob空间，因此在jffs2_flash_setup函数中会将cleanmarker_size置为0)
+	 */
 	c->cleanmarker_size = sizeof(struct jffs2_unknown_node);
 
 	/* NAND (or other bizarre) flash... do setup accordingly */
@@ -525,6 +539,7 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 	ret = -EINVAL;
 
 	D1(printk(KERN_DEBUG "jffs2_do_fill_super(): Getting root inode\n"));
+	/* 创建root节点的inode对象 */
 	root_i = iget(sb, 1);
 	if (is_bad_inode(root_i)) {
 		D1(printk(KERN_WARNING "get root inode failed\n"));
@@ -532,6 +547,7 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	D1(printk(KERN_DEBUG "jffs2_do_fill_super(): d_alloc_root()\n"));
+	/* 创建root节点的dentry对象 */
 	sb->s_root = d_alloc_root(root_i);
 	if (!sb->s_root)
 		goto out_root_i;
@@ -540,6 +556,7 @@ int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_blocksize = PAGE_CACHE_SIZE;
 	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
 	sb->s_magic = JFFS2_SUPER_MAGIC;
+	/* 非只读挂载，则创建垃圾回收线程 */
 	if (!(sb->s_flags & MS_RDONLY))
 		jffs2_start_garbage_collect_thread(c);
 	return 0;
@@ -660,6 +677,7 @@ void jffs2_gc_release_page(struct jffs2_sb_info *c,
 static int jffs2_flash_setup(struct jffs2_sb_info *c) {
 	int ret = 0;
 
+	/* mtd为nand flash，必须开启CONFIG_JFFS2_FS_WRITEBUFFER编译 */
 	if (jffs2_cleanmarker_oob(c)) {
 		/* NAND flash... do setup accordingly */
 		ret = jffs2_nand_flash_setup(c);
@@ -667,7 +685,7 @@ static int jffs2_flash_setup(struct jffs2_sb_info *c) {
 			return ret;
 	}
 
-	/* and Dataflash */
+	/* mtd为Dataflash，必须开启CONFIG_JFFS2_FS_WRITEBUFFER编译 */
 	if (jffs2_dataflash(c)) {
 		ret = jffs2_dataflash_setup(c);
 		if (ret)

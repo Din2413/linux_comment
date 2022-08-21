@@ -266,6 +266,14 @@ struct zone {
 	 * on the higher zones). This array is recalculated at runtime if the
 	 * sysctl_lowmem_reserve_ratio sysctl changes.
 	 */
+	/**
+	 * 为防止高区域类型过度借用低区域类型的物理页，低区域类型需要采样防卫措施，保留一定数量的物理页
+	 * 但一个内存节点的某个区域从另外一个内存节点的相同区域借用物理页，后者应毫无保留地借用
+	 * 
+	 * 内存区域的保留页数存放在lowmem_reserve[MAX_NR_ZONES]数组中
+	 * zone[i]->lowmem_reserve[j]表示区域类型i应该保留多少页不能借给区域类型j
+	 * 只有当j大于i时才有意义
+	 */
 	unsigned long		lowmem_reserve[MAX_NR_ZONES];
 
 #ifdef CONFIG_NUMA

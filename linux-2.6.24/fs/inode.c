@@ -72,6 +72,10 @@ static unsigned int i_hash_shift __read_mostly;
 
 LIST_HEAD(inode_in_use);
 LIST_HEAD(inode_unused);
+/**
+ * 文件系统中位于内存的所有inode存放在inode_hashtable的全局hash表中
+ * hash表加快了对索引节点对象的搜索
+ */
 static struct hlist_head *inode_hashtable __read_mostly;
 
 /*
@@ -108,6 +112,9 @@ static void wake_up_inode(struct inode *inode)
 	wake_up_bit(&inode->i_state, __I_LOCK);
 }
 
+/**
+ * 创建vfs通用文件节点inode对象
+ */
 static struct inode *alloc_inode(struct super_block *sb)
 {
 	static const struct address_space_operations empty_aops;
@@ -115,6 +122,7 @@ static struct inode *alloc_inode(struct super_block *sb)
 	static const struct file_operations empty_fops;
 	struct inode *inode;
 
+	/* 如果文件系统定义独有的节点分配函数alloc_inode，则调用alloc_inode创建节点对象 */
 	if (sb->s_op->alloc_inode)
 		inode = sb->s_op->alloc_inode(sb);
 	else
@@ -669,6 +677,11 @@ static struct inode * get_new_inode_fast(struct super_block *sb, struct hlist_he
 
 		spin_lock(&inode_lock);
 		/* We released the lock, so.. */
+		/**
+		 * 创建inode节点对象时未加锁，可能存在并行创建同一文件节点对象的情况
+		 * 等创建完inode节点对象时，再次查找inode_hashtable是否已经存在同一文件节点对象
+		 * 如果存在，则释放掉当前创建的新inode对象，否则将新inode对象加入各状态链表中
+		 */
 		old = find_inode_fast(sb, head, ino);
 		if (!old) {
 			inode->i_ino = ino;
@@ -977,6 +990,14 @@ EXPORT_SYMBOL(iget5_locked);
  * new inode and this is returned locked, hashed, and with the I_NEW flag set.
  * The file system gets to fill it in before unlocking it via
  * unlock_new_inode().
+ */
+/**
+ * 在inode_hashtable哈希表查找文件系统中节点号为ino的inode虚拟文件节点对象
+ * 当节点对象不存在时，则调用get_new_inode_fast函数创建
+ *
+ * 与iget5_locked函数的区别：
+ * 1、iget_locked用于节点号ino唯一标识文件的文件系统；
+ * 2、iget5_locked则用于节点号ino不能唯一标识（通过test对文件内容进行比较）文件的文件系统；
  */
 struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 {

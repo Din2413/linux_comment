@@ -36,8 +36,16 @@ struct vm_area_struct;
  */
 /* 允许内核对请求空闲页框块的当前进程进行阻塞 */
 #define __GFP_WAIT	((__force gfp_t)0x10u)	/* Can wait and reschedule? */
+/* 指明调用者是高优先级的，为了使系统能向前推进，必须准许这个请求 */
 #define __GFP_HIGH	((__force gfp_t)0x20u)	/* Should access emergency pools? */
+/* 允许读写存储设备 */
 #define __GFP_IO	((__force gfp_t)0x40u)	/* Can start physical IO? */
+/**
+ * 允许向下调用底层文件系统
+ *
+ * 当文件系统申请页的时候，如果内存严重不足，直接回收页，把脏页写回存储设备，调用文件系统函数，可能导致四十
+ * 为了避免死锁，文件系统申请页的时候应该清楚这个标志位
+ */
 #define __GFP_FS	((__force gfp_t)0x80u)	/* Can call down to low-level FS? */
 /* 所请求的页可能为"冷"的，即不在CPU硬件高速缓存中 */
 #define __GFP_COLD	((__force gfp_t)0x100u)	/* Cache-cold page required */
@@ -47,7 +55,13 @@ struct vm_area_struct;
 #define __GFP_NORETRY	((__force gfp_t)0x1000u)/* Do not retry.  Might fail */
 #define __GFP_COMP	((__force gfp_t)0x4000u)/* Add compound page metadata */
 #define __GFP_ZERO	((__force gfp_t)0x8000u)/* Return zeroed page on success */
+/* 禁止访问紧急保留内存 */
 #define __GFP_NOMEMALLOC ((__force gfp_t)0x10000u) /* Don't use emergency reserves */
+/**
+ * 实施cpuset内存分配策略
+ * cpuset是控制组cgroup的一个子系统，提供把处理器和内存节点的集合分配给一组进程的机制
+ * 即允许进程在哪些处理器上允许和从哪些内存节点申请页
+ */
 #define __GFP_HARDWALL   ((__force gfp_t)0x20000u) /* Enforce hardwall cpuset memory allocs */
 #define __GFP_THISNODE	((__force gfp_t)0x40000u)/* No fallback, no policies */
 #define __GFP_RECLAIMABLE ((__force gfp_t)0x80000u) /* Page is reclaimable */

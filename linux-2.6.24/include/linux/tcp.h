@@ -224,13 +224,19 @@ struct tcp_options_received {
 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
 };
 
+/**
+ * TCP连接请求块
+ * 保存双方的初始序号、双方端口以及IP地址等，并控制连接的建立
+ */
 struct tcp_request_sock {
 	struct inet_request_sock 	req;
 #ifdef CONFIG_TCP_MD5SIG
 	/* Only used by TCP MD5 Signature so far. */
 	struct tcp_request_sock_ops	*af_specific;
 #endif
+	/* 客户端的初始序号，接收到客户端连接请求SYN段的序号 */
 	u32			 	rcv_isn;
+	/* 服务端的初始序号，服务端发送SYN+ACK段的序号 */
 	u32			 	snt_isn;
 };
 
@@ -303,6 +309,7 @@ struct tcp_sock {
 	u32	rttvar;		/* smoothed mdev_max			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 
+	/* TCP连接已发送但还未被确认的数据包数量 */
 	u32	packets_out;	/* Packets which are "in flight"	*/
 	u32	retrans_out;	/* Retransmitted packets out		*/
 /*

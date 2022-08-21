@@ -99,6 +99,7 @@ struct inet_hashinfo {
 	 *
 	 * TIME_WAIT sockets use a separate chain (twchain).
 	 */
+	/* ehash指向一个大小为ehash_size的inet_ehash_bucket结构类型的散列表，用来管理TCP状态除LISTEN之外的传输控制块的散列表 */
 	struct inet_ehash_bucket	*ehash;
 	rwlock_t			*ehash_locks;
 	unsigned int			ehash_size;
@@ -116,6 +117,7 @@ struct inet_hashinfo {
 	 * table where wildcard'd TCP sockets can exist.  Hash function here
 	 * is just local port number.
 	 */
+	/* 用来存储管理LISTEN状态的传输控制块的散列表 */
 	struct hlist_head		listening_hash[INET_LHTABLE_SIZE];
 
 	/* All the above members are written once at bootup and

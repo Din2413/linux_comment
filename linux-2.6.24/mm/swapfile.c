@@ -1410,6 +1410,18 @@ __initcall(procswaps_init);
  *
  * The swapon system call
  */
+/**
+ * swapon命令启动swap时执行
+ *
+ * Linux swap机制只是提供了一个方便的扩充虚拟内存的方法，至于在哪些设备上扩充，完全由用户决定
+ * 1、如果需要开辟一块swap空间，需要先在已挂载的分区目录创建一个文件
+ * 	dd if=/dev/zero of=/data/swapfile bs=1m count=4096
+ * 2、再通过mkswap命令把文件格式化成swap分区
+ * 	mkswap /data/swapfile
+ * 3、最后通过swapon命令开启swap分区（此时会检查文件类型是否为swap分区）
+ * 	swapon /data/swapfile
+ * 4、Linux内核便可以在内存不足时将用户空间的匿名页换出到上面创建的swap分区
+ */
 asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 {
 	struct swap_info_struct * p;
@@ -1517,10 +1529,13 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		goto bad_swap;
 	}
 
+	/* swap分区（文件或磁盘分区）大小 */
 	swapfilesize = i_size_read(inode) >> PAGE_SHIFT;
 
 	/*
 	 * Read the swap header.
+	 * mkswap命令会将磁盘分区或文件格式化成swap类型，其实只是写入swap_header信息
+	 * 在swapon开启swap分区时，会检查是否已格式化到swap类型，如果没有则开启swap分区失败
 	 */
 	if (!mapping->a_ops->readpage) {
 		error = -EINVAL;
@@ -1578,6 +1593,16 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		 * the swp_entry_t or the architecture definition of a
 		 * swap pte.
 		 */
+		/**
+		 * swap分区允许换出的最大页数，受限于一下配置：
+		 * 1、换出的页在swap分区中的偏移位置由swp_entry_t的offset部分指定，
+		 * 	offset占用位数决定swap分区支持的最大页数
+		 * 2、为了能通过页表找到页帧换出后在swap分区位置，需要将swp_entry_t转换成
+		 * 	页表项存入该页对应的pte中，转换后的格式也将限制swap分区能换出的最大页数
+		 * 3、所创建的swap文件的大小
+		 *
+		 * 以上三者中最小的数值便是swap分区所能换出的页数
+		 */
 		maxpages = swp_offset(pte_to_swp_entry(swp_entry_to_pte(swp_entry(0,~0UL)))) - 1;
 		if (maxpages > swap_header->info.last_page)
 			maxpages = swap_header->info.last_page;
@@ -1597,6 +1622,14 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 			goto bad_swap;
 
 		/* OK, set up the swap map and apply the bad block list */
+		/**
+		 * swap分区中每个页单元状态由swap_map数组中对应位置的成员表示
+		 * 值为0表示页单元空闲，大于0则表示页单元被引用的进程数量
+		 * 其中特殊值SWAP_MAP_BAD表示swap分区该位置的页单元标记为坏页，不可用于换出页
+		 *
+		 * mkswap格式化swap文件时，会计算分区badpages数量，并写入swap_header->info.nr_badpages
+		 * nr_good_pages表示去除badpages的可用页数量
+		 */
 		if (!(p->swap_map = vmalloc(maxpages * sizeof(short)))) {
 			error = -ENOMEM;
 			goto bad_swap;

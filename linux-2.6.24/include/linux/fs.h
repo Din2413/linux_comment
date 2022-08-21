@@ -1022,9 +1022,9 @@ struct super_block {
 	unsigned char		s_dirt;
 	/* 文件的最长长度 */
 	unsigned long long	s_maxbytes;	/* Max file size */
-	/* 超级块所属文件系统类型 */
+	/* 超级块所属文件系统类型，每种文件系统必须由register_filesystem接口注册，所有文件系统类型以链表的形式链接在一起 */
 	struct file_system_type	*s_type;
-	/* 超级块方法，读取、写会inode元数据等 */
+	/* 超级块方法，读取、写入inode元数据等，在mount时由文件系统get_sb回调指定 */
 	const struct super_operations	*s_op;
 	struct dquot_operations	*dq_op;
  	struct quotactl_ops	*s_qcop;
@@ -1063,8 +1063,8 @@ struct super_block {
 	char s_id[32];				/* Informational name */
 
 	/*
-	 * 指向属于具体文件系统的超级块信息，例如Ext4文件系统的struct ext4_sb_info
-	 * 包含与虚拟文件系统无关但与具体文件系统相关的数据，如磁盘分配位掩码
+	 * 指向文件系统的、无法通用的独特信息，例如Ext4文件系统的struct ext4_sb_info
+	 * 包含与虚拟文件系统无关但与具体文件系统相关的数据，如jffs2中擦写均衡功能所需的数据结构
 	 */
 	void 			*s_fs_info;	/* Filesystem private info */
 
@@ -1803,7 +1803,8 @@ extern void unlock_new_inode(struct inode *);
 static inline struct inode *iget(struct super_block *sb, unsigned long ino)
 {
 	struct inode *inode = iget_locked(sb, ino);
-	
+
+	/* inode文件节点对象刚被创建，则调用文件系统super_operation方法表中的read_inode初始化节点对象，如jffs2文件系统的jffs2_read_inode */
 	if (inode && (inode->i_state & I_NEW)) {
 		sb->s_op->read_inode(inode);
 		unlock_new_inode(inode);

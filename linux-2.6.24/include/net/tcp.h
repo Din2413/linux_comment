@@ -162,6 +162,13 @@ extern void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define TCPOPT_WINDOW		3	/* Window scaling */
 #define TCPOPT_SACK_PERM        4       /* SACK Permitted */
 #define TCPOPT_SACK             5       /* SACK Block */
+/**
+ * 时间戳选项
+ * 1、用来计算往返时间RTT：发送方在发送报文段时将当前时间值放入时间戳tsval中，接收方在确认该报文时把收到的时间戳复制到tsecr字段中，接收方收到确认报文后，便可准确计算RTT；
+ * 问：为什么需要时间戳选项计算RTT？
+ * 答：可想而知的另一个计算RTT的方案是“TCP发送一个包时，记录这个包的发送时间戳T1，用收到确认包的时间戳T2减去T1得到RTT”。但如果数据包存在超时重传，那便无法得知收到的确认ACK是对第一次包还是重传包的确认；
+ * 2、PAWS 防止回绕的序号：数据包传输序号只有32位，超过便会重复回绕使用，在高速网络中，可能存在序号相同但内容不同的数据包同时在传输，通过时间戳可以很容易区分相同序列号的数据包；
+ */
 #define TCPOPT_TIMESTAMP	8	/* Better RTT estimations/PAWS */
 #define TCPOPT_MD5SIG		19	/* MD5 Signature (RFC2385) */
 
@@ -1031,10 +1038,17 @@ static inline int tcp_fin_time(const struct sock *sk)
 	return fin_timeout;
 }
 
+/**
+ * PAWS（Protection Against Wrapped Sequences）基于TCP的timestamps选项实现，用于拒绝接收过期的重复报文
+ */
 static inline int tcp_paws_check(const struct tcp_options_received *rx_opt, int rst)
 {
+	/* 当前数据包时间戳大于上一个数据包的时间戳，则认为数据包未过期 */
 	if ((s32)(rx_opt->rcv_tsval - rx_opt->ts_recent) >= 0)
 		return 0;
+	/**
+	 * 否则，如果已经有超过24天没有接收到对端的报文，也认为数据包未过期（时间戳回卷）
+	 */
 	if (get_seconds() >= rx_opt->ts_recent_stamp + TCP_PAWS_24DAYS)
 		return 0;
 

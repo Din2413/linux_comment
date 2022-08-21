@@ -2186,10 +2186,12 @@ struct sk_buff * tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 		return NULL;
 
 	/* Reserve space for headers. */
+	/* 为MAC层、IP层、TCP层首部预留必要的空间 */
 	skb_reserve(skb, MAX_TCP_HEADER);
 
 	skb->dst = dst_clone(dst);
 
+	/* 根据接收的SYN段中的选项计算SYN+ACK段的TCP首部长度 */
 	tcp_header_size = (sizeof(struct tcphdr) + TCPOLEN_MSS +
 			   (ireq->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0) +
 			   (ireq->wscale_ok ? TCPOLEN_WSCALE_ALIGNED : 0) +
@@ -2202,14 +2204,17 @@ struct sk_buff * tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	if (md5)
 		tcp_header_size += TCPOLEN_MD5SIG_ALIGNED;
 #endif
+	/* 设置skb->transport_header指向TCP首部的起始位置，后续可以根据transport_header获取TCP首部指针 */
 	skb_push(skb, tcp_header_size);
 	skb_reset_transport_header(skb);
 
 	th = tcp_hdr(skb);
 	memset(th, 0, sizeof(struct tcphdr));
+	/* 标识为SYN+ACK段 */
 	th->syn = 1;
 	th->ack = 1;
 	TCP_ECN_make_synack(req, th);
+	/* 源端口和目的端口 */
 	th->source = inet_sk(sk)->sport;
 	th->dest = ireq->rmt_port;
 	TCP_SKB_CB(skb)->seq = tcp_rsk(req)->snt_isn;
@@ -2218,6 +2223,7 @@ struct sk_buff * tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	skb_shinfo(skb)->gso_segs = 1;
 	skb_shinfo(skb)->gso_size = 0;
 	skb_shinfo(skb)->gso_type = 0;
+	/* 数据包序列号和确认序列号 */
 	th->seq = htonl(TCP_SKB_CB(skb)->seq);
 	th->ack_seq = htonl(tcp_rsk(req)->rcv_isn + 1);
 	if (req->rcv_wnd == 0) { /* ignored for retransmitted syns */

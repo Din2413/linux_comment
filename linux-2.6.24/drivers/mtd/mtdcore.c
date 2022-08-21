@@ -72,6 +72,7 @@ int add_mtd_device(struct mtd_info *mtd)
 			DEBUG(0, "mtd: Giving out device %d to %s\n",i, mtd->name);
 			/* No need to get a refcount on the module containing
 			   the notifier, since we hold the mtd_table_mutex */
+			/* 通知创建MTD原始设备模拟的字符设备和块设备 */
 			list_for_each(this, &mtd_notifiers) {
 				struct mtd_notifier *not = list_entry(this, struct mtd_notifier, list);
 				not->add(mtd);
@@ -117,6 +118,7 @@ int del_mtd_device (struct mtd_info *mtd)
 
 		/* No need to get a refcount on the module containing
 		   the notifier, since we hold the mtd_table_mutex */
+		/* 通知删除MTD原始设备模拟的字符设备和块设备 */
 		list_for_each(this, &mtd_notifiers) {
 			struct mtd_notifier *not = list_entry(this, struct mtd_notifier, list);
 			not->remove(mtd);

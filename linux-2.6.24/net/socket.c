@@ -231,8 +231,14 @@ int move_addr_to_user(void *kaddr, int klen, void __user *uaddr,
 
 #define SOCKFS_MAGIC 0x534F434B
 
+/* 套接口文件系统的i结点缓存队列 */
 static struct kmem_cache *sock_inode_cachep __read_mostly;
 
+/**
+ * 套接口文件系统的i结点分配函数
+ * 套接口文件系统的i结点与套接口是一一对应的，该函数分配的不是一个单纯的结点，而是i结点和socket结构的组合体socket_alloc结构
+ * 这样可以使套接口的分配及与之绑定的套接口文件的i结点的分配同时进行
+ */
 static struct inode *sock_alloc_inode(struct super_block *sb)
 {
 	struct socket_alloc *ei;
@@ -252,6 +258,7 @@ static struct inode *sock_alloc_inode(struct super_block *sb)
 	return &ei->vfs_inode;
 }
 
+/* 套接口文件系统的i结点释放函数 */
 static void sock_destroy_inode(struct inode *inode)
 {
 	kmem_cache_free(sock_inode_cachep,
@@ -295,6 +302,9 @@ static int sockfs_get_sb(struct file_system_type *fs_type,
 
 static struct vfsmount *sock_mnt __read_mostly;
 
+/**
+ * 为使套接口与文件描述符关联，套接口层注册了类型为sockfs的文件系统
+ */
 static struct file_system_type sock_fs_type = {
 	.name =		"sockfs",
 	.get_sb =	sockfs_get_sb,
@@ -381,11 +391,13 @@ static int sock_attach_fd(struct socket *sock, struct file *file)
 	d_instantiate(dentry, SOCK_INODE(sock));
 
 	sock->file = file;
+	/* 初始化file对象，设置文件操作函数集为socket_file_ops，用于实现从文件系统到套接口层的跳转 */
 	init_file(file, sock_mnt, dentry, FMODE_READ | FMODE_WRITE,
 		  &socket_file_ops);
 	SOCK_INODE(sock)->i_fop = &socket_file_ops;
 	file->f_flags = O_RDWR;
 	file->f_pos = 0;
+	/* 通过文件描述符fd找到文件对象file后，便可通过file的private_data成员获取套接口对象 */
 	file->private_data = sock;
 
 	return 0;
@@ -394,9 +406,11 @@ static int sock_attach_fd(struct socket *sock, struct file *file)
 int sock_map_fd(struct socket *sock)
 {
 	struct file *newfile;
+	/* 获取空闲的文件描述符fd和文件对象file结构实例 */
 	int fd = sock_alloc_fd(&newfile);
 
 	if (likely(fd >= 0)) {
+		/* 绑定套接口和文件对象file */
 		int err = sock_attach_fd(sock, newfile);
 
 		if (unlikely(err < 0)) {
@@ -404,8 +418,11 @@ int sock_map_fd(struct socket *sock)
 			put_unused_fd(fd);
 			return err;
 		}
+		/* 根据文件描述符fd将文件对象file增加到当前进程已打开的文件列表中，完成文件与进程的关联 */
 		fd_install(fd, newfile);
 	}
+
+	/* 后续，可根据文件描述符da找到文件对象file，再通过文件对象file找到套接口 */
 	return fd;
 }
 
@@ -448,6 +465,7 @@ struct socket *sockfd_lookup(int fd, int *err)
 	return sock;
 }
 
+/* 根据文件描述符fd获取套接口 */
 static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
 {
 	struct file *file;
@@ -1204,10 +1222,12 @@ asmlinkage long sys_socket(int family, int type, int protocol)
 	int retval;
 	struct socket *sock;
 
+	/* 创建套接口 */
 	retval = sock_create(family, type, protocol, &sock);
 	if (retval < 0)
 		goto out;
 
+	/* 绑定套接口与文件描述符，应用层通过绑定的文件描述符访问套接口 */
 	retval = sock_map_fd(sock);
 	if (retval < 0)
 		goto out_release;

@@ -276,10 +276,12 @@ static int page_referenced_one(struct page *page,
 	spinlock_t *ptl;
 	int referenced = 0;
 
+	/* 计算引用页帧对应的虚拟页地址 */
 	address = vma_address(page, vma);
 	if (address == -EFAULT)
 		goto out;
 
+	/* 虚拟地址address通过页表转化到物理页帧号，并验证是否与page直接转换的物理页帧号一致 */
 	pte = page_check_address(page, mm, address, &ptl);
 	if (!pte)
 		goto out;
@@ -675,6 +677,10 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	 * If the page is mlock()d, we cannot swap it out.
 	 * If it's recently referenced (perhaps page_referenced
 	 * skipped over this mm) then we should reactivate it.
+	 */
+	/**
+	 * 虚拟区被lock，不能回收页帧
+	 * (CPU访问该页时会设置该标志位)pte_young表示页刚被访问过，也不适合把页帧换出，同时清除该标志位
 	 */
 	if (!migration && ((vma->vm_flags & VM_LOCKED) ||
 			(ptep_clear_flush_young(vma, address, pte)))) {
