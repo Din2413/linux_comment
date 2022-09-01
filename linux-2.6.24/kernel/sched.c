@@ -1926,6 +1926,11 @@ asmlinkage void schedule_tail(struct task_struct *prev)
  * context_switch - switch to the new MM and the new
  * thread's register state.
  */
+/*
+ * 进程上下文切换，主要包含两部分：
+ * 1、地址空间切换，页表以及TLB处理；
+ * 2、硬件上下文切换，堆栈寄存器、指令寄存器等；
+ */
 static inline void
 context_switch(struct rq *rq, struct task_struct *prev,
 	       struct task_struct *next)
@@ -1964,6 +1969,13 @@ context_switch(struct rq *rq, struct task_struct *prev,
 #endif
 
 	/* Here we just switch the register state and the stack. */
+	/*
+	 * 进程切换实际涉及三个进程，当进程A切换到进程B，后续进程A再次获得CPU时，可能是从另外的进程C切换的
+	 * A->B时，prev指向A进程描述符，next指向B进程描述符
+	 * 但是，当C->A时，prev应指向C进程描述符，next应指向A进程描述符
+	 *
+	 * 因此，利用第三个参数实现，在A->B切换前（同理C->A切换前），将A（同理C进程描述符地址）进程描述符地址放入CPU寄存器中，在C->A切换后，将对应CPU寄存器的指放入第三个参数的地址空间，从而使得A再次获得CPU时，prev能指向进程C
+	 */
 	switch_to(prev, next, prev);
 
 	barrier();

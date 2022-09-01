@@ -16,22 +16,30 @@ extern struct task_struct * FASTCALL(__switch_to(struct task_struct *prev, struc
  * Saving eflags is important. It switches not only IOPL between tasks,
  * it also protects other tasks from NT leaking through sysenter etc.
  */
+/* 采用扩展的内联汇编语言编码，通过特殊位置计数法使用寄存器，实际使用的通用寄存器由编译器自由选择 */
+/*
+ * 进程硬件上下文切换流程：
+ * 1、保存prev进程部分寄存器到内核堆栈中，并将%esp堆栈寄存器存入prev->thread.esp字段
+ * 2、将next->thread.esp字段装入%esp堆栈寄存器，从此CPU开始使用next进程的堆栈空间
+ * 3、将next进程下一条待执行指令地址next->thread.eip压入堆栈顶部（后续ret指令返回取栈顶返回地址时便能直接切换到next进程的指令空间运行）
+ * 4、（__switch_to）处理其他硬件上下文切换（浮点运算、段寄存器等），将prev进程描述符地址存入%eax寄存器，并调用ret指令返回
+ */
 #define switch_to(prev,next,last) do {					\
-	unsigned long esi,edi;						\
+	unsigned long esi,edi;	 /* 内嵌汇编语法：__asm__(汇编语句模板: 输出部分: 输入部分: 破坏描述部分)，第一部分必不可少，后三部分可选 */				\
 	asm volatile("pushfl\n\t"		/* Save flags */	\
 		     "pushl %%ebp\n\t"					\
-		     "movl %%esp,%0\n\t"	/* save ESP */		\
-		     "movl %5,%%esp\n\t"	/* restore ESP */	\
-		     "movl $1f,%1\n\t"		/* save EIP */		\
-		     "pushl %6\n\t"		/* restore EIP */	\
-		     "jmp __switch_to\n"				\
-		     "1:\t"						\
+		     "movl %%esp,%0\n\t"	/* save ESP，将指向堆栈顶部的esp寄存器的内容保存到prev->thread.esp字段中 */		\
+		     "movl %5,%%esp\n\t"	/* restore ESP，将next->thread.esp字段的值装入指向堆栈顶部的esp寄存器 */	\
+		     "movl $1f,%1\n\t"		/* save EIP，将标记为1的地址装入prev->thread.eip字段中，当被替换进程重新恢复执行时，进程执行被标记为1的那条指令 */		\
+		     "pushl %6\n\t"		/* restore EIP，那next->thread.eip字段的值（绝大多数情况下是一个被标记为1的地址）压入next的内核栈中 */	\
+		     "jmp __switch_to\n"	/* 跳转到__switch_to() c函数执行 */			\
+		     "1:\t"		            /* 这里被替换的进程再次获得CPU，执行恢复eflags和ebp寄存器，这两条指令的第一条指令被标记为1 */ 				\
 		     "popl %%ebp\n\t"					\
 		     "popfl"						\
-		     :"=m" (prev->thread.esp),"=m" (prev->thread.eip),	\
-		      "=a" (last),"=S" (esi),"=D" (edi)			\
-		     :"m" (next->thread.esp),"m" (next->thread.eip),	\
-		      "2" (prev), "d" (next));				\
+		     :"=m" (prev->thread.esp),"=m" (prev->thread.eip),	/* 输出部分 */ \
+		      "=a" (last),"=S" (esi),"=D" (edi)	/* 替换进程A再次获得CPU（C->A）时，将%eax寄存器的值（C进程描述符地址）保存到last地址指向的单元，last与prev指向内容相同，prev跟随变化指向进程C描述符 */		\
+		     :"m" (next->thread.esp),"m" (next->thread.eip),	/* 输入部分 */ \
+		      "2" (prev), "d" (next));			/* A进程切换B前，next(B)装入到%edx、prev(A)装入到%eax */	\
 } while (0)
 
 #define _set_base(addr,base) do { unsigned long __pr; \

@@ -31,8 +31,19 @@
 /*
  * Scheduling policies
  */
+/* 普通的分时进程 */
 #define SCHED_NORMAL		0
+/*
+ * 先进先出的实时进程
+ * 当调度程序把CPU分配给进程时，把进程描述符保留在运行队列链表的当前位置
+ * 如果没有其他可运行的更高优先级实时进程，进程就继续使用CPU，及时还有其他同优先级的实时进程处于可运行状态
+ */
 #define SCHED_FIFO		1
+/*
+ * 时间片轮转的实时进程
+ * 当调度程序把CPU分配给进程时，把进程描述符放在运行队列链表的末尾
+ * 保证对所有具有相同优先级的SCHED_RR实时进程公平地分配CPU时间
+ */
 #define SCHED_RR		2
 #define SCHED_BATCH		3
 /* SCHED_ISO: reserved but not implemented yet */
@@ -1054,6 +1065,7 @@ struct task_struct {
 	struct sysv_sem sysvsem;
 #endif
 /* CPU-specific state of this task */
+	/* 保存进程的硬件上下文，跟体系结构类型强相关 */
 	struct thread_struct thread;
 /* filesystem information */
 	struct fs_struct *fs;

@@ -769,6 +769,11 @@ struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct tas
 
 	x86_write_percpu(current_task, next_p);
 
+	/*
+	 * return prev_p汇编指令：movl %edi,%eax ; ret
+	 * 第一条指令将prev进程描述符地址移入%eax寄存器中，作为第二条指令ret的返回值
+	 * 第二条指令从%esp寄存器指向的堆栈中取出返回地址装入%eip寄存器（在switch_to中，已经将next->thread.eip值压入栈顶，从此开始执行next进程的指令）
+	 */
 	return prev_p;
 }
 

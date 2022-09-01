@@ -349,7 +349,9 @@ struct thread_struct {
 	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
 	unsigned long	esp0;
 	unsigned long	sysenter_cs;
+	/* 对应寄存器%eip，指向下一条即将执行的指令 */
 	unsigned long	eip;
+	/* 对应寄存器%esp，指向内核堆栈的栈顶 */
 	unsigned long	esp;
 	unsigned long	fs;
 	unsigned long	gs;
