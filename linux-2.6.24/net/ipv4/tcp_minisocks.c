@@ -489,7 +489,7 @@ struct sock *tcp_create_openreq_child(struct sock *sk, struct request_sock *req,
  *	Process an incoming packet for SYN_RECV sockets represented
  *	as a request_sock.
  */
-
+/* 在SYN_RECV状态下的连接请求块用tcp_check_req()来处理接收到的TCP段 */
 struct sock *tcp_check_req(struct sock *sk,struct sk_buff *skb,
 			   struct request_sock *req,
 			   struct request_sock **prev)
@@ -501,21 +501,25 @@ struct sock *tcp_check_req(struct sock *sk,struct sk_buff *skb,
 	struct sock *child;
 
 	tmp_opt.saw_tstamp = 0;
+	/* 解析TCP选项 */
 	if (th->doff > (sizeof(struct tcphdr)>>2)) {
 		tcp_parse_options(skb, &tmp_opt, 0);
 
 		if (tmp_opt.saw_tstamp) {
+			/* ts_recent表示在此连接中接收到的上一个数据包时间戳 */
 			tmp_opt.ts_recent = req->ts_recent;
 			/* We do not store true stamp, but it is not required,
 			 * it can be estimated (approximately)
 			 * from another data.
 			 */
 			tmp_opt.ts_recent_stamp = get_seconds() - ((TCP_TIMEOUT_INIT/HZ)<<req->retrans);
+			/* 检测TCP序列号是否有效（PAWS检测） */
 			paws_reject = tcp_paws_check(&tmp_opt, th->rst);
 		}
 	}
 
 	/* Check for pure retransmitted SYN. */
+	/* SYN重传，再次发送SYN+ACK段，返回NULL表示处理完毕，可直接释放skb */
 	if (TCP_SKB_CB(skb)->seq == tcp_rsk(req)->rcv_isn &&
 	    flg == TCP_FLAG_SYN &&
 	    !paws_reject) {
@@ -604,7 +608,7 @@ struct sock *tcp_check_req(struct sock *sk,struct sk_buff *skb,
 	 */
 
 	/* RFC793: "first check sequence number". */
-
+	/* 段序号无效或者不在接收窗口内，则返回NULL直接丢弃接收的段 */
 	if (paws_reject || !tcp_in_window(TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq,
 					  tcp_rsk(req)->rcv_isn + 1, tcp_rsk(req)->rcv_isn + 1 + req->rcv_wnd)) {
 		/* Out of window: send ACK and drop. */
@@ -616,7 +620,7 @@ struct sock *tcp_check_req(struct sock *sk,struct sk_buff *skb,
 	}
 
 	/* In sequence, PAWS is OK. */
-
+	/* ACK段的序号正常，则保持TCP段的时间戳到连接请求块的ts_recent */
 	if (tmp_opt.saw_tstamp && !after(TCP_SKB_CB(skb)->seq, tcp_rsk(req)->rcv_isn + 1))
 			req->ts_recent = tmp_opt.rcv_tsval;
 

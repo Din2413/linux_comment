@@ -32,8 +32,17 @@ int sysctl_tcp_retries1 __read_mostly = TCP_RETR1;
 int sysctl_tcp_retries2 __read_mostly = TCP_RETR2;
 int sysctl_tcp_orphan_retries __read_mostly;
 
+/**
+ * 重传定时器
+ * 在TCP发送数据时设定，如果定时器已超时而对端确认还未到达，则TCP将重传数据
+ */
 static void tcp_write_timer(unsigned long);
 static void tcp_delack_timer(unsigned long);
+/**
+ * 连接建立定时器
+ * tcp_keepalive_timer()实现了TCP中三个定时器：连接建立定时器、保活定时器和FIN_WAIT_2定时器
+ * 这三个定时器分别处于LISTEN、ESTABLISHED和FIN_WAIT_2三种状态，因此不必区分他们，只要简单通过当前的TCP状态即可判断当前执行何种定时器
+ */
 static void tcp_keepalive_timer (unsigned long data);
 
 void tcp_init_xmit_timers(struct sock *sk)
@@ -122,6 +131,7 @@ static int tcp_write_timeout(struct sock *sk)
 	int retry_until;
 	int mss;
 
+	/* 连接建立过程中，SYN_SENT表示主动打开（客户端），SYN_RECV表示被动打开（服务端） */
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		if (icsk->icsk_retransmits)
 			dst_negative_advice(&sk->sk_dst_cache);
@@ -279,11 +289,13 @@ static void tcp_retransmit_timer(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
+	/* 不存在已发送未被确认的数据包，则无需处理 */
 	if (!tp->packets_out)
 		goto out;
 
 	BUG_TRAP(!tcp_write_queue_empty(sk));
 
+	/* 发送窗口已关闭、套接口不在DEAD状态且TCP不处于连接过程中时，表明数据耗尽发送窗口且一直未收到确认报文 */
 	if (!tp->snd_wnd && !sock_flag(sk, SOCK_DEAD) &&
 	    !((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV))) {
 		/* Receiver dastardly shrinks window. Our retransmits
@@ -299,10 +311,12 @@ static void tcp_retransmit_timer(struct sock *sk)
 			       inet->num, tp->snd_una, tp->snd_nxt);
 		}
 #endif
+		/* 如果超时重传时间上限TCP_RTO_MAX(120s)还没有接收到确认报文，则认为有错误发送 */
 		if (tcp_time_stamp - tp->rcv_tstamp > TCP_RTO_MAX) {
 			tcp_write_err(sk);
 			goto out;
 		}
+		/* 否则，TCP进入拥塞控制的LOSS状态，并重新传输重传队列中第一个段 */
 		tcp_enter_loss(sk, 0);
 		tcp_retransmit_skb(sk, tcp_write_queue_head(sk));
 		__sk_dst_reset(sk);
@@ -312,6 +326,7 @@ static void tcp_retransmit_timer(struct sock *sk)
 	if (tcp_write_timeout(sk))
 		goto out;
 
+	/* 如果重传次数为0，说明刚进入重传阶段，根据不同的拥塞状态进行相关的数据统计 */
 	if (icsk->icsk_retransmits == 0) {
 		if (icsk->icsk_ca_state == TCP_CA_Disorder ||
 		    icsk->icsk_ca_state == TCP_CA_Recovery) {
@@ -333,12 +348,17 @@ static void tcp_retransmit_timer(struct sock *sk)
 		}
 	}
 
+	/**
+	 * 判断是否可使用F-RTO算法进行处理，如果可以则调用tcp_enter_frto()进行F-RTO算法处理
+	 * 否则调用tcp_enter_loss()进入常规的RTO慢启动重传恢复阶段
+	 */
 	if (tcp_use_frto(sk)) {
 		tcp_enter_frto(sk);
 	} else {
 		tcp_enter_loss(sk, 0);
 	}
 
+	/* 发送重传队列上的第一个SKB */
 	if (tcp_retransmit_skb(sk, tcp_write_queue_head(sk)) > 0) {
 		/* Retransmission failed because of local congestion,
 		 * do not backoff.
@@ -378,6 +398,11 @@ out_reset_timer:
 out:;
 }
 
+/**
+ * 重传定时器，在TCP发送数据时设定
+ * 如果定时器已超时而对端确认还未送达，则TCP将重传数据
+ * 重传定时器的超时时间值时动态计算的，取决于TCP为该连接测量的往返事件以及该段已被重传的次数
+ */
 static void tcp_write_timer(unsigned long data)
 {
 	struct sock *sk = (struct sock*)data;
@@ -391,19 +416,27 @@ static void tcp_write_timer(unsigned long data)
 		goto out_unlock;
 	}
 
+	/* TCP状态为CLOSE或者不存在未处理事件，则直接退出 */
 	if (sk->sk_state == TCP_CLOSE || !icsk->icsk_pending)
 		goto out;
 
+	/* 如果还是未到定时器超时事件，无需处理，重新设定超时时间并直接退出 */
 	if (time_after(icsk->icsk_timeout, jiffies)) {
 		sk_reset_timer(sk, &icsk->icsk_retransmit_timer, icsk->icsk_timeout);
 		goto out;
 	}
 
+	/**
+	 * 重传定时器和持续定时器功能是共用一个定时器实现的，因此需更具定时器事件区分激活的是哪种定时器
+	 * 如果event为ICSK_TIME_RETRANS，则调用tcp_retransmit_timer()进行重传处理
+	 * 如果event为ICSK_TIME_PROBE0，则调用tcp_probe_timer()进行持续定时器处理
+	 */
 	event = icsk->icsk_pending;
 	icsk->icsk_pending = 0;
 
 	switch (event) {
 	case ICSK_TIME_RETRANS:
+		/* 重传处理 */
 		tcp_retransmit_timer(sk);
 		break;
 	case ICSK_TIME_PROBE0:
@@ -425,6 +458,12 @@ out_unlock:
 
 static void tcp_synack_timer(struct sock *sk)
 {
+	/**
+	 * 调用inet_csk_reqsk_queue_prune()扫描半连接散列表：
+	 * 1、半连接队列的连接请求块个数超过最大个数的一半时，需要为接受没有重传过的连接保留一半的空间；
+	 * 2、半连接队列要尽量保持没有重传过的连接，并删除一些长时间空闲或没有接受的连接；
+	 * 再设定建立连接定时器的超时时间为TCP_TIMEOUT_INIT
+	 */
 	inet_csk_reqsk_queue_prune(sk, TCP_SYNQ_INTERVAL,
 				   TCP_TIMEOUT_INIT, TCP_RTO_MAX);
 }
@@ -448,6 +487,7 @@ static void tcp_keepalive_timer (unsigned long data)
 	struct tcp_sock *tp = tcp_sk(sk);
 	__u32 elapsed;
 
+	/* 如果传输控制块被用户进程锁定，则重新设定定时时间，0.05s后再次激活 */
 	/* Only process if socket is not in use. */
 	bh_lock_sock(sk);
 	if (sock_owned_by_user(sk)) {
@@ -456,6 +496,10 @@ static void tcp_keepalive_timer (unsigned long data)
 		goto out;
 	}
 
+	/**
+	 * 如果当前TCP状态为LISTEN，则说明执行的是连接建立定时器，调用tcp_synack_timer()处理
+	 * 即：被动建立连接，接收到客户端的SYN并且发送SYN+ACK段后，等待客户端的ACK段，试图建立一个新的连接时启动，超时几次后，连接建立中止
+	 */
 	if (sk->sk_state == TCP_LISTEN) {
 		tcp_synack_timer(sk);
 		goto out;

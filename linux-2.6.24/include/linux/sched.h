@@ -689,7 +689,9 @@ enum cpu_idle_type {
 #define test_sd_parent(sd, flag)	((sd->parent &&		\
 					 (sd->parent->flags & flag)) ? 1 : 0)
 
-
+/*
+ * CPU调度组 （参考链接：https://zhuanlan.zhihu.com/p/363799928）
+ */
 struct sched_group {
 	struct sched_group *next;	/* Must be a circular list */
 	cpumask_t cpumask;
@@ -707,13 +709,31 @@ struct sched_group {
 	u32 reciprocal_cpu_power;
 };
 
+/*
+ * CPU调度域
+ *
+ * 多CPU多核处理器存在不同的调度层级：
+ * 1、SMP系统，由多个物理CPU构成，每个CPU拥有独立的缓存cache，但共享系统中所有物理内存
+ * 2、每个物理CPU又由多个核Core构成，每个核一般拥有独立的L1 Cache，但可能共享L2 Cache
+ * 3、每个核Core又可以实现多个硬件线程（超线程技术），每个硬件线程逻辑上就是一个单独的执行单元，核内硬件线程几乎共享所以东西
+ *
+ * 每个调度域就是具有相同属性的一组CPU集合，根据硬件线程、多核、SMP等划分成不同的级别，不同级之间通过parent、child指针链接成树型结构
+ * 越靠近根节点，调度域的广度越大，进程迁移导致的成本消耗也就越高
+ *
+ * 进程在不同的调度层级之间进行迁移时，迁移所消耗的成本和性能也才存在差异的，迁移时跨越的层级越大，成本越高（cache miss、TLB miss等等）
+ * 在执行负载均衡时，以调度域为单位进行进程迁移，优先在调度域内处理，再依次向上处理高层级调度域，降低迁移成本
+ */
 struct sched_domain {
 	/* These fields must be setup */
 	struct sched_domain *parent;	/* top domain must be null terminated */
 	struct sched_domain *child;	/* bottom domain must be null terminated */
+	/* CPU调度组 */
 	struct sched_group *groups;	/* the balancing groups of the domain */
+	/* 当前调度域中所有CPU位图 */
 	cpumask_t span;			/* span of all CPUs in this domain */
+	/* 最小load balance间隔 */
 	unsigned long min_interval;	/* Minimum balance interval ms */
+	/* 最大load balance间隔 */
 	unsigned long max_interval;	/* Maximum balance interval ms */
 	unsigned int busy_factor;	/* less balancing by factor if busy */
 	unsigned int imbalance_pct;	/* No balance until over watermark */

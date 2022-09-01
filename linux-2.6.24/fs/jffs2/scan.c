@@ -96,7 +96,14 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 #ifndef __ECOS
 	size_t pointlen;
 
+	/**
+	 * NOR flash允许“就地允许”（XIP，即eXecute_In_Place），读NOR flash的操作与读sdram类似，
+	 * 而flash驱动中的读方法(read)本地操作为memcpy，因此通过内存映射读取NOR flash比通过驱动读方法要节约一次内存拷贝
+	 * 
+	 * 如果NOR flash驱动程序实现了point和unpoint方法，则允许建立内存映射，并通过映射的方式读取
+	 */
 	if (c->mtd->point) {
+		/* 试图映射完整的flash分区，如果实际被映射长度小于flash大小，则取消映射 */
 		ret = c->mtd->point (c->mtd, 0, c->mtd->size, &pointlen, &flashbuf);
 		if (!ret && pointlen < c->mtd->size) {
 			/* Don't muck about if it won't let us point to the whole flash */
@@ -108,6 +115,11 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 			D1(printk(KERN_DEBUG "MTD point failed %d\n", ret));
 	}
 #endif
+	/**
+	 * 尚未建立内存映射，则额外分配一个缓冲区用于读出flash内容
+	 * 对于NAND flash，一次性读出整个擦除块更快，则缓冲区大小为擦除块大小
+	 * 对于NOR flash，缓冲区大小设定为一个内存页框大小
+	 */
 	if (!flashbuf) {
 		/* For NAND it's quicker to read a whole eraseblock at a time,
 		   apparently */
@@ -135,6 +147,7 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 		}
 	}
 
+	/* 遍历flash分区的各个擦除块 */
 	for (i=0; i<c->nr_blocks; i++) {
 		struct jffs2_eraseblock *jeb = &c->blocks[i];
 
@@ -143,6 +156,7 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 		/* reset summary info for next eraseblock scan */
 		jffs2_sum_reset_collected(s);
 
+		/* 扫描每个擦除块，并根据块的使用情况返回对应状态值 */
 		ret = jffs2_scan_eraseblock(c, jeb, buf_size?flashbuf:(flashbuf+jeb->offset),
 						buf_size, s);
 
@@ -153,6 +167,10 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 
 		/* Now decide which list to put it on */
 		switch(ret) {
+		/**
+		 * 擦除块上为全1，即没有任何信息，当然CLEANMARKER数据实体也没有
+		 * 将该擦除块加入erase_pending_list链表，该链表中的擦除块即将被擦除，成功擦除后要在擦除块的开始写入CLEANMARKER
+		 */
 		case BLK_STATE_ALLFF:
 			/*
 			 * Empty block.   Since we can't be sure it
@@ -166,6 +184,10 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 			c->nr_erasing_blocks++;
 			break;
 
+		/**
+		 * 擦除块中只有一个CLEANMARKER数据实体是有效的
+		 * 如果擦除块的dirty_size为0，即擦除块没有任何过时数据实体，则加入free_list链表，否则加入erase_pending_list链表
+		 */
 		case BLK_STATE_CLEANMARKER:
 			/* Only a CLEANMARKER node is valid */
 			if (!jeb->dirty_size) {
@@ -180,15 +202,25 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 			}
 			break;
 
+		/**
+		 * 如果擦除块中基本上都是有效数据，则加入clean_list链表
+		 */
 		case BLK_STATE_CLEAN:
 			/* Full (or almost full) of clean data. Clean list */
 			list_add(&jeb->list, &c->clean_list);
 			break;
 
+		/**
+		 * 擦除块含有至少一个过时的数据实体
+		 */
 		case BLK_STATE_PARTDIRTY:
 			/* Some data, but not full. Dirty list. */
 			/* We want to remember the block with most free space
 			and stick it in the 'nextblock' position to start writing to it. */
+			/**
+			 * 如果擦除块的空闲空间大于一定数值(min_free)，并且大于当前写入操作发生的擦除块(c->nextblock指向)的空闲空间
+			 * 则将c->nextblock指向当前擦除块，而把nextblock原先指向的擦除块插入(very)dirty_list，
+			 */
 			if (jeb->free_size > min_free(c) &&
 					(!c->nextblock || c->nextblock->free_size < jeb->free_size)) {
 				/* Better candidate for the next writes to go to */
@@ -203,6 +235,7 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 				jffs2_sum_move_collected(c, s);
 				D1(printk(KERN_DEBUG "jffs2_scan_medium(): new nextblock = 0x%08x\n", jeb->offset));
 				c->nextblock = jeb;
+			/* 否则直接将当前擦除块插入(very)dirty_list */
 			} else {
 				ret = file_dirty(c, jeb);
 				if (ret)
@@ -210,6 +243,9 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 			}
 			break;
 
+		/**
+		 * 擦除块全都是过时的数据实体，且没有CLEANMARKER，加入erase_pending_list链表
+		 */
 		case BLK_STATE_ALLDIRTY:
 			/* Nothing valid - not even a clean marker. Needs erasing. */
 			/* For now we just put it on the erasing list. We'll start the erases later */
@@ -218,6 +254,9 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 			c->nr_erasing_blocks++;
 			break;
 
+		/**
+		 * 擦除块已经损坏，将其加入bad_list链表，并增加bad_size计数、减小flash分区大小
+		 */
 		case BLK_STATE_BADBLOCK:
 			D1(printk(KERN_NOTICE "JFFS2: Block at 0x%08x is bad\n", jeb->offset));
 			list_add(&jeb->list, &c->bad_list);
@@ -533,11 +572,17 @@ static int jffs2_scan_eraseblock (struct jffs2_sb_info *c, struct jffs2_eraseblo
 		}
 	}
 
+	/* buf_ofs为擦除块在flash分区内的偏移 */
 	buf_ofs = jeb->offset;
 
+	/**
+	 * buf_size为0，表示NOR flash调用point完成整个flash分区的内存映射
+	 * 则一次处理sector长度，并且无需通过mtd->read读取flash数据，而是直接内存访问
+	 */
 	if (!buf_size) {
 		/* This is the XIP case -- we're reading _directly_ from the flash chip */
 		buf_len = c->sector_size;
+	/* 否则一次处理EMPTY_SCAN_SIZE(最大为1024)长度，并调用mtd->read读取flash数据存入缓冲区 */
 	} else {
 		buf_len = EMPTY_SCAN_SIZE(c->sector_size);
 		err = jffs2_fill_scan_buf(c, buf, buf_ofs, buf_len);
@@ -549,9 +594,11 @@ static int jffs2_scan_eraseblock (struct jffs2_sb_info *c, struct jffs2_eraseblo
 	ofs = 0;
 
 	/* Scan only 4KiB of 0xFF before declaring it's empty */
+	/* 跳过擦除块首部的全0xff数据(一次叠加4字节是因为jffs2数据实体按照4字节对齐) */
 	while(ofs < EMPTY_SCAN_SIZE(c->sector_size) && *(uint32_t *)(&buf[ofs]) == 0xFFFFFFFF)
 		ofs += 4;
 
+	/* 若前EMPTY_SCAN_SIZE(最大1024)长度全为0xff，则认为整个擦除块为空 */
 	if (ofs == EMPTY_SCAN_SIZE(c->sector_size)) {
 #ifdef CONFIG_JFFS2_FS_WRITEBUFFER
 		if (jffs2_cleanmarker_oob(c)) {
@@ -566,6 +613,7 @@ static int jffs2_scan_eraseblock (struct jffs2_sb_info *c, struct jffs2_eraseblo
 		}
 #endif
 		D1(printk(KERN_DEBUG "Block at 0x%08x is empty (erased)\n", jeb->offset));
+		/* NAND flash的CLEANMARKER存放在oob空间，CLEANMARKER块内占用长度为0 */
 		if (c->cleanmarker_size == 0)
 			return BLK_STATE_CLEANMARKER;	/* don't bother with re-erase */
 		else
@@ -599,6 +647,7 @@ scan_more:
 
 		cond_resched();
 
+		/* 数据实体按4字节对齐 */
 		if (ofs & 3) {
 			printk(KERN_WARNING "Eep. ofs 0x%08x not word-aligned!\n", ofs);
 			ofs = PAD(ofs);
@@ -613,6 +662,7 @@ scan_more:
 		}
 		prevofs = ofs;
 
+		/* 擦除块的末尾无法容纳一个数据实体的头部信息，更新dirty且擦除块遍历完毕，调出循环 */
 		if (jeb->offset + c->sector_size < ofs + sizeof(*node)) {
 			D1(printk(KERN_DEBUG "Fewer than %zd bytes left to end of block. (%x+%x<%x+%zx) Not reading\n", sizeof(struct jffs2_unknown_node),
 				  jeb->offset, c->sector_size, ofs, sizeof(*node)));
@@ -621,6 +671,7 @@ scan_more:
 			break;
 		}
 
+		/* 缓冲区末尾没有包含一个数据实体的头部信息，则从ofs偏移开始读取最长为缓冲区size的数据填充到缓冲区 */
 		if (buf_ofs + buf_len < ofs + sizeof(*node)) {
 			buf_len = min_t(uint32_t, buf_size, jeb->offset + c->sector_size - ofs);
 			D1(printk(KERN_DEBUG "Fewer than %zd bytes (node header) left to end of buf. Reading 0x%x at 0x%08x\n",
@@ -631,6 +682,7 @@ scan_more:
 			buf_ofs = ofs;
 		}
 
+		/* 从flash分区偏移ofs位置（缓冲区的ofs-buf_ofs位置）读取数据实体头部 */
 		node = (struct jffs2_unknown_node *)&buf[ofs-buf_ofs];
 
 		if (*(uint32_t *)(&buf[ofs-buf_ofs]) == 0xffffffff) {
@@ -752,6 +804,9 @@ scan_more:
 			continue;
 		}
 
+		/**
+		 * 所有有效的数据节点类型中JFFS2_NODE_ACCURATE均有效，否则跳过整个数据实体
+		 */
 		if (!(je16_to_cpu(node->nodetype) & JFFS2_NODE_ACCURATE)) {
 			/* Wheee. This is an obsoleted node */
 			D2(printk(KERN_DEBUG "Node at 0x%08x is obsolete. Skipping\n", ofs));
@@ -762,7 +817,13 @@ scan_more:
 		}
 
 		switch(je16_to_cpu(node->nodetype)) {
+		/**
+		 * 数据实体为jffs2_raw_inode，由jffs2_sacn_inode_node创建相应的内核描述符jffs2_raw_node_ref
+		 * 如果数据实体为某文件的第一个数据实体，则创建对应的内核描述符jffs2_inode_cache，并加入inocache_list哈希表
+		 * 最后建立数据实体描述符与文件描述符之间的链接关系
+		 */
 		case JFFS2_NODETYPE_INODE:
+			/* 缓冲区末尾只包含数据实体的部分内容，则从ofs偏移开始读取最长为缓冲区size的数据填充到缓冲区 */
 			if (buf_ofs + buf_len < ofs + sizeof(struct jffs2_raw_inode)) {
 				buf_len = min_t(uint32_t, buf_size, jeb->offset + c->sector_size - ofs);
 				D1(printk(KERN_DEBUG "Fewer than %zd bytes (inode node) left to end of buf. Reading 0x%x at 0x%08x\n",
@@ -962,6 +1023,7 @@ static int jffs2_scan_inode_node(struct jffs2_sb_info *c, struct jffs2_erasebloc
 	   operational may actually be _longer_ than before. Sucks to be me. */
 
 	/* Check the node CRC in any case. */
+	/* 检验数据实体除开数据部分的CRC */
 	crc = crc32(0, ri, sizeof(*ri)-8);
 	if (crc != je32_to_cpu(ri->node_crc)) {
 		printk(KERN_NOTICE "jffs2_scan_inode_node(): CRC failed on "
@@ -975,8 +1037,10 @@ static int jffs2_scan_inode_node(struct jffs2_sb_info *c, struct jffs2_erasebloc
 					      PAD(je32_to_cpu(ri->totlen)));
 	}
 
+	/* 以ino文件结点号从inocache_list哈希表中获取该文件的jffs2_inode_cache内核描述符 */
 	ic = jffs2_get_ino_cache(c, ino);
 	if (!ic) {
+		/* 不存在则创建 */
 		ic = jffs2_scan_make_ino_cache(c, ino);
 		if (!ic)
 			return -ENOMEM;

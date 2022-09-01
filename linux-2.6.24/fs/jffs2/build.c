@@ -83,6 +83,11 @@ static void jffs2_build_inode_pass1(struct jffs2_sb_info *c,
  - Scan directory tree from top down, setting nlink in inocaches
  - Scan inocaches for inodes with nlink==0
 */
+/**
+ * 扫描flash分区的所有擦写块，为所有数据实体建立对应的jffs2_raw_node_ref内核描述符
+ * 为所有的文件创建jffs2_inode_cache内核描述符，并插入inocache_list哈希表
+ * 根据擦写块的使用情况将各个擦写块的描述符插入不同的链表
+ */
 static int jffs2_build_filesystem(struct jffs2_sb_info *c)
 {
 	int ret;
@@ -96,6 +101,7 @@ static int jffs2_build_filesystem(struct jffs2_sb_info *c)
 	/* First, scan the medium and build all the inode caches with
 	   lists of physical nodes */
 
+	/* 扫描flash分区的所有擦写块（可改进点：挂载耗时与flash分区大小、文件数据实体个数成正比） */
 	c->flags |= JFFS2_SB_FLAG_SCANNING;
 	ret = jffs2_scan_medium(c);
 	c->flags &= ~JFFS2_SB_FLAG_SCANNING;
@@ -323,6 +329,7 @@ int jffs2_do_mount_fs(struct jffs2_sb_info *c)
 
 	c->free_size = c->flash_size;
 	c->nr_blocks = c->flash_size / c->sector_size;
+	/* 为flash分区的所有擦写块分配描述符，并初始化各擦写块相对分区起始地址的偏移位置和块大小 */
 	size = sizeof(struct jffs2_eraseblock) * c->nr_blocks;
 #ifndef __ECOS
 	if (jffs2_blocks_use_vmalloc(c))
@@ -340,6 +347,7 @@ int jffs2_do_mount_fs(struct jffs2_sb_info *c)
 		c->blocks[i].free_size = c->sector_size;
 	}
 
+	/* 初始化各种块状态链表，用于垃圾回收和磨损均衡 */
 	INIT_LIST_HEAD(&c->clean_list);
 	INIT_LIST_HEAD(&c->very_dirty_list);
 	INIT_LIST_HEAD(&c->dirty_list);
@@ -358,6 +366,7 @@ int jffs2_do_mount_fs(struct jffs2_sb_info *c)
 	if (ret)
 		goto out_free;
 
+	/* 完成jffs2文件系统挂载 */
 	if (jffs2_build_filesystem(c)) {
 		dbg_fsbuild("build_fs failed\n");
 		jffs2_free_ino_caches(c);

@@ -136,10 +136,25 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 	DEBUG(MTD_DEBUG_LEVEL2, "mtdblock: write on \"%s\" at 0x%lx, size 0x%x\n",
 		mtd->name, pos, len);
 
+	/* 没有写入cache时，每写一个扇区都直接调用mtd原始设备的写接口进行数据写入 */
 	if (!sect_size)
 		return mtd->write(mtd, pos, len, &retlen, buf);
 
+	/**
+	 * 提供写入cache时，扇区数据优先写入cache中
+	 * 直到cache写满或者下次写入扇区位置不在当前cache覆盖范围内（比如上次cache缓存第一个擦写块的数据，下次写入第二个擦写块位置的扇区时）
+	 */
 	while (len > 0) {
+		/**
+		 * 按照写入cache大小对齐，计算当前写入的扇区所属擦鞋块的起始地址
+		 * sect_start	       pos
+		 * |                    |
+		 * |----------------------------------------------------|
+		 * |          -         sect_size          -            |
+		 * sect_size为cache大小，为擦除块大小
+		 * sect_start为当前写入扇区所属擦除块的起始地址
+		 * offset为当前写入扇区在所属擦除块的偏移位置
+		 */
 		unsigned long sect_start = (pos/sect_size)*sect_size;
 		unsigned int offset = pos - sect_start;
 		unsigned int size = sect_size - offset;
@@ -158,6 +173,7 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 		} else {
 			/* Partial sector: need to use the cache */
 
+			/* cache是脏的，且cache位置上不包含写入的扇区，则先将cache写回flash */
 			if (mtdblk->cache_state == STATE_DIRTY &&
 			    mtdblk->cache_offset != sect_start) {
 				ret = write_cached_data(mtdblk);
@@ -165,6 +181,7 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 					return ret;
 			}
 
+			/* cache已写回或不包含有效数据时，读取写入扇区所属的擦除块保存到cache */
 			if (mtdblk->cache_state == STATE_EMPTY ||
 			    mtdblk->cache_offset != sect_start) {
 				/* fill the cache with the current sector */
@@ -182,6 +199,7 @@ static int do_cached_write (struct mtdblk_dev *mtdblk, unsigned long pos,
 			}
 
 			/* write data to our local cache */
+			/* 覆盖cache内容，将cache标记为脏 */
 			memcpy (mtdblk->cache_data + offset, buf, size);
 			mtdblk->cache_state = STATE_DIRTY;
 		}
@@ -338,20 +356,24 @@ static int mtdblock_flush(struct mtd_blktrans_dev *dev)
 
 static void mtdblock_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 {
+	/* 创建mtd设备对应的模拟块设备描述符对象 */
 	struct mtd_blktrans_dev *dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 
 	if (!dev)
 		return;
 
+	/* mtd块设备对应的mtd设备 */
 	dev->mtd = mtd;
 	dev->devnum = mtd->index;
 
+	/* mtd块设备中模拟扇区个数 */
 	dev->size = mtd->size >> 9;
 	dev->tr = tr;
 
 	if (!(mtd->flags & MTD_WRITEABLE))
 		dev->readonly = 1;
 
+	/* 创建mtd块设备节点，为用户空间提供访问入口 */
 	add_mtd_blktrans_dev(dev);
 }
 

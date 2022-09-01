@@ -69,6 +69,22 @@
  */
 #define PG_locked	 	 0	/* Page is locked. Don't touch. */
 #define PG_error		 1
+/**
+ * 页是否被访问标志，LRU内存回收算法利用该标志进行内存回收
+ *
+ * 页被访问时：（mark_page_accessed函数实现）
+ * 1、如果page在active_list且PG_referenced标志位为0，则将page的PG_referenced标志位设置为1；
+ * 2、如果page在inactive_list且PG_referenced标志位为1，则将page迁移到active_list活跃链表头部且将PG_referenced标志位设置为0；
+ * 3、如果page在inactive_list且PG_referenced标志位为0，则将page的PG_referenced标志位设置为1；
+ *
+ * 页被回收时：（内存淘汰只能从inactive_list非活跃链表进行）
+ * 1、shrink_active_list遍历活跃链表时：（shrink_active_list函数实现，长期未访问的页面需要进行衰退处理）
+ *   如果page的PG_referenced标志位为1，则将page的PG_rederenced标志位设置为0；
+ *   如果page的PG_referenced标志位为0，则将page迁移到inactive_list非活跃链表头部；
+ * 2、shrink_inactive_list遍历非活跃链表时：（shrink_inactive_list函数实现）
+ *   如果page的PG_referenced标志位为1，则跳过此页并将page的PG_referenced标志位设置为0；
+ *   如果page的PG_referenced标志位为0，则表示该page可被回收；
+ */
 #define PG_referenced		 2
 #define PG_uptodate		 3
 

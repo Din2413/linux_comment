@@ -3211,6 +3211,10 @@ void tcp_parse_options(struct sk_buff *skb, struct tcp_options_received *opt_rx,
 					break;
 				case TCPOPT_TIMESTAMP:
 					if (opsize==TCPOLEN_TIMESTAMP) {
+						/**
+						 * 发送方发送数据时，将一个发送时间戳放在发送方时间戳tsval字段中
+						 * 接收方收到数据包以后，将收到的时间戳原封不动的返回给发送方，放在tsecr字段中，同时把自己的时间戳放在tsval字段中
+						 */
 						if ((estab && opt_rx->tstamp_ok) ||
 						    (!estab && sysctl_tcp_timestamps)) {
 							opt_rx->saw_tstamp = 1;
@@ -4961,13 +4965,21 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 	case TCP_CLOSE:
 		goto discard;
 
+	/* 传输控制块为LISTEN的段的处理过程 */
 	case TCP_LISTEN:
+		/**
+		 * 半连接的LISTEN状态下，只处理SYN段
+		 * 如果是ACK段，连接尚未建立则直接返回1，发送RST段
+		 * 如果是RST段，则直接丢弃
+		 * 如果是SYN段，则由conn_request函数(TCP中为tcp_v4_conn_request)处理连接请求
+		 */
 		if (th->ack)
 			return 1;
 
 		if (th->rst)
 			goto discard;
 
+		/* SYN段，则由conn_request函数(TCP中为tcp_v4_conn_request)处理连接请求(新建连接请求块并回应SYN+ACK段) */
 		if (th->syn) {
 			if (icsk->icsk_af_ops->conn_request(sk, skb) < 0)
 				return 1;

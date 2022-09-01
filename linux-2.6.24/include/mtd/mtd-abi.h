@@ -117,10 +117,17 @@ struct nand_oobfree {
  * ECC layout control structure. Exported to userspace for
  * diagnosis and to allow creation of raw images
  */
+/**
+ * nand flash的ecc布局，每个page都对应一个oob空间，其中部分用于存储该page页对应的ecc校验码
+ */
 struct nand_ecclayout {
+	/* oob空间中ecc校验码使用的字节数 */
 	uint32_t eccbytes;
+	/* 每个ecc校验码字节所在oob空间的位置 */
 	uint32_t eccpos[64];
+	/* oob空间中可用的字节数 */
 	uint32_t oobavail;
+	/* oob空间按中空闲的字节区域 */
 	struct nand_oobfree oobfree[MTD_MAX_OOBFREE_ENTRIES];
 };
 

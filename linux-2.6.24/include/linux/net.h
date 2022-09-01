@@ -45,11 +45,17 @@ struct net;
 #define SYS_SENDMSG	16		/* sys_sendmsg(2)		*/
 #define SYS_RECVMSG	17		/* sys_recvmsg(2)		*/
 
+/* 套接口所处的状态标志 */
 typedef enum {
+	/* 套接口尚未分配，未使用 */
 	SS_FREE = 0,			/* not allocated		*/
+	/* 套接口未连接任何一个对端的套接口 */
 	SS_UNCONNECTED,			/* unconnected to any socket	*/
+	/* 套接口正在连接过程中 */
 	SS_CONNECTING,			/* in process of connecting	*/
+	/* 套接口已连接一个套接口 */
 	SS_CONNECTED,			/* connected to socket		*/
+	/* 套接口正在断开连接的过程中 */
 	SS_DISCONNECTING		/* in process of disconnecting	*/
 } socket_state;
 
@@ -59,10 +65,16 @@ typedef enum {
 #include <linux/stringify.h>
 #include <linux/random.h>
 
+/* 一组套接口标志位 */
+/* 标识异步的情况下套接口的发送队列是否已满 */
 #define SOCK_ASYNC_NOSPACE	0
+/* 标识应用程序通过recv调用时，是否在等待数据的接收 */
 #define SOCK_ASYNC_WAITDATA	1
+/* 标识非异步的情况下该套接口的发送队列是否已满 */
 #define SOCK_NOSPACE		2
+/* 标识是否设置了SO_PASSCRE套接口选项 */
 #define SOCK_PASSCRED		3
+/* 标识是否设置了SO_PASSEC套接口选项 */
 #define SOCK_PASSSEC		4
 
 #ifndef ARCH_HAS_SOCKET_TYPES
@@ -82,12 +94,19 @@ typedef enum {
  * overrides this enum for binary compat reasons.
  */
 enum sock_type {
+	/* 基于连接的套接口 */
 	SOCK_STREAM	= 1,
+	/* 基于数据包的套接口 */
 	SOCK_DGRAM	= 2,
+	/* 原始套接口 */
 	SOCK_RAW	= 3,
+	/* 可靠传送报文套接口 */
 	SOCK_RDM	= 4,
+	/* 顺序分组套接口 */
 	SOCK_SEQPACKET	= 5,
+	/* 数据包拥塞控制协议套接口 */
 	SOCK_DCCP	= 6,
+	/* 混杂模式套接口 */
 	SOCK_PACKET	= 10,
 };
 
@@ -113,13 +132,23 @@ enum sock_shutdown_cmd {
  *  @type: socket type (%SOCK_STREAM, etc)
  */
 struct socket {
+	/* 套接口所处状态 */
 	socket_state		state;
 	unsigned long		flags;
+	/**
+	 * 指向套接口系统调用中选择对应类型的套接口层接口，用来将套接口层系统调用映射到相应的传输层协议实现
+	 * 比如PF_INET协议族中定义了三种proto_ops结构实例：TCP、UDP、RAW
+	 */
 	const struct proto_ops	*ops;
+	/* 存储异步操作的通知队列 */
 	struct fasync_struct	*fasync_list;
+	/* 除套接口系统调用外，为秉承”指向与套接口关联的file文件对象指针 */
 	struct file		*file;
+	/* 指向与套接口关联的传输控制块 */
 	struct sock		*sk;
+	/* 套接口的等待进程队列 */
 	wait_queue_head_t	wait;
+	/* 套接口类型，如：SOCK_STREAM 基于连接的套接口等，详见enum sock_type */
 	short			type;
 };
 
@@ -130,6 +159,12 @@ struct sockaddr;
 struct msghdr;
 struct module;
 
+/**
+ * 每个传输层的协议都需要定义一个特定的proto_ops接口实例
+ * 可看作是协议无关的套接口层系统调用到协议相关的传输层函数的跳转表
+ *
+ * 与之对应的，struct proto结构又将传输层映射到网络层
+ */
 struct proto_ops {
 	int		family;
 	struct module	*owner;
@@ -174,8 +209,15 @@ struct proto_ops {
 				      int offset, size_t size, int flags);
 };
 
+/**
+ * 对于不同的协议族，其传输层的结构和实现有着巨大的差异，因此其各自的套接口创建函数也会有很大区别
+ * 而net_proto_family结构屏蔽了这些区别，使得各个协议族在初始化时，可以统一用sock_register()注册到net_families数组中
+ * 实际上net_proto_family结构提供了一个协议族到套接口创建之间的接口，套接口创建时根据选定的套接口类型调用对应的create函数
+ */
 struct net_proto_family {
+	/* 协议族对应的协议族常量，Internet协议族是PF_INET */
 	int		family;
+	/* 协议族的套接口创建函数指针，每个协议族都有不同的实现方式，Internet协议族对应的实现为inet_create() */
 	int		(*create)(struct net *net, struct socket *sock, int protocol);
 	struct module	*owner;
 };

@@ -157,6 +157,9 @@ struct ucred {
 };
 
 /* Supported address families. */
+/**
+ * 地址族，地址族用地址族常量标识，目前为止，地址族常量和协议族常量是一一对应的，且值相同
+ */
 #define AF_UNSPEC	0
 #define AF_UNIX		1	/* Unix domain sockets 		*/
 #define AF_LOCAL	1	/* POSIX name for AF_UNIX	*/
@@ -191,6 +194,10 @@ struct ucred {
 #define AF_RXRPC	33	/* RxRPC sockets 		*/
 #define AF_MAX		34	/* For now.. */
 
+/**
+ * Linux目前可支持的协议族，每个协议族用一个net_proto_family结构示例表示
+ * 系统初始化时，以各协议族对应的协议族常量为下标，调用sock_register()将结构注册到全局数组net_families[NPROTO]中
+ */
 /* Protocol families, same as address families. */
 #define PF_UNSPEC	AF_UNSPEC
 #define PF_UNIX		AF_UNIX

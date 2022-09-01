@@ -114,7 +114,7 @@ struct scan_control {
  * From 0 .. 100.  Higher means more swappy.
  */
 /*
- * 内存回收是anonymous pages和file pages的比重，值越大，回收越优先选择anonymous pages
+ * 内存回收时anonymous pages和file pages的比重，值越大，回收越优先选择anonymous pages
  * anonymous pages指磁盘中不存在文件映射的内存，如栈、堆等，回收时，需要先将页写入swap空间
  * files pages指磁盘中存在文件映射的内存，如文件缓存，回收时，根据脏页属性，决定是否需要writeback写回，对于非脏页，可直接回收
  * anonymous pages回收一定涉及IO操作，而file pages因定期write back机制涉及IO操作的概率较小
@@ -123,6 +123,10 @@ struct scan_control {
 int vm_swappiness = 60;
 long vm_total_pages;	/* The total number of pages which the VM controls */
 
+/**
+ * slab缓存回收列表
+ * 某些创建slab缓存的内核子系统会注册shrinker接口到shrinker_list用于回收slab对象缓存
+ */
 static LIST_HEAD(shrinker_list);
 static DECLARE_RWSEM(shrinker_rwsem);
 
@@ -485,7 +489,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
 
-		/* 页被锁定，则重新放回非活动链表 */
+		/* PG_locked标志置位，页被锁定，则重新放回非活动链表 */
 		if (TestSetPageLocked(page))
 			goto keep;
 
@@ -530,6 +534,10 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 * Anonymous process memory has backing store?
 		 * Try to allocate it some swap space here.
 		 */
+		/**
+		 * 开启swap编译，匿名页且还未设置swapcache状态（页等待swap换出），
+		 * 从swap分区选择一个空闲的页单元并设置页swapcache状态，等待后续换出到swap分区
+		 */
 		if (PageAnon(page) && !PageSwapCache(page))
 			if (!add_to_swap(page, GFP_ATOMIC))
 				goto activate_locked;
@@ -540,6 +548,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		/*
 		 * The page is mapped into the page tables of one or more
 		 * processes. Try to unmap it here.
+		 *
+		 * 通过页帧的反向映射（具体参见page->mapping字段）机制解除page的所有页表项的引用，
+		 * 并将页表项pte设置为页所在（swap）文件的偏移
 		 */
 		if (page_mapped(page) && mapping) {
 			switch (try_to_unmap(page, 0)) {
@@ -561,6 +572,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				goto keep_locked;
 
 			/* Page is dirty, try to write it out here */
+			/* 将等待swap换出的匿名页换出到swap分区、或者被修改的文件映射页回写到磁盘 */
 			switch (pageout(page, mapping, sync_writeback)) {
 			case PAGE_KEEP:
 				goto keep_locked;
@@ -669,6 +681,7 @@ static int __isolate_lru_page(struct page *page, int mode)
 		return ret;
 
 	ret = -EBUSY;
+	/* 增加page引用计数 */
 	if (likely(get_page_unless_zero(page))) {
 		/*
 		 * Be careful not to clear PageLRU until after we're
@@ -1082,6 +1095,7 @@ force_reclaim_mapped:
 	lru_add_drain();
 	/* LRU链表需采用lru_lock自旋锁互斥保护，为提高执行效率，将nr_pages个页一并移动到l_hold链表上，而不是逐个判断是否满足inactive条件 */
 	spin_lock_irq(&zone->lru_lock);
+	/* 拆分lru链表时，对每一个拆分的page增加引用计数，防止page处理过程中被free，直到重新加入到目标lru链表后，由pagevec_release释放引用计数，并判断page引用计数是否为0需要free */
 	pgmoved = isolate_lru_pages(nr_pages, &zone->active_list,
 			    &l_hold, &pgscanned, sc->order, ISOLATE_ACTIVE);
 	zone->pages_scanned += pgscanned;
@@ -1113,6 +1127,7 @@ force_reclaim_mapped:
 	}
 
 	/* 将l_inactive链表页框移动到zone->inactive_list，表示为可回收页框 */
+	/* 引入pagever暂存器，累计一定数量page后统一处理，减少lru_lock锁定时间 */
 	pagevec_init(&pvec, 1);
 	pgmoved = 0;
 	spin_lock_irq(&zone->lru_lock);
@@ -1133,6 +1148,7 @@ force_reclaim_mapped:
 			pgmoved = 0;
 			if (buffer_heads_over_limit)
 				pagevec_strip(&pvec);
+			/* 释放isolate_lru_pages拆分lru链表时对page增加的引用计数，并判断page引用计数是否减少为0需要free，如果需要则执行page free动作 */
 			__pagevec_release(&pvec);
 			spin_lock_irq(&zone->lru_lock);
 		}
@@ -1159,6 +1175,8 @@ force_reclaim_mapped:
 			__mod_zone_page_state(zone, NR_ACTIVE, pgmoved);
 			pgmoved = 0;
 			spin_unlock_irq(&zone->lru_lock);
+			/* 释放isolate_lru_pages拆分lru链表时对page增加的引用计数，并判断page引用计数是否减少为0需要free，如果需要则执行page free动作 */
+			/* 这块free的页框不会算入kswap回收 */
 			__pagevec_release(&pvec);
 			spin_lock_irq(&zone->lru_lock);
 		}
@@ -1182,7 +1200,7 @@ force_reclaim_mapped:
  * 参考：https://os.51cto.com/art/202109/680795.htm
  *
  * 页框回收算法的三个基本情形：
- * 1、kswapd内核线性（低水位分配失败时唤醒、周期性唤醒）：kswapd->balance_pgdat->shrink_zone
+ * 1、kswapd内核线程（低水位分配失败时唤醒、周期性唤醒）：kswapd->balance_pgdat->shrink_zone
  * 2、zone水位线检测失败时依据zone_reclaim_mode决定是否立即对zone回收：zone_reclaim->__zone_reclaim->shrink_zone
  * 3、内存极度紧缺（__alloc_pages最小水位线分配失败、alloc_page_buffers/__getblk_slow缓存区分配失败）：try_to_free_pages->shrink_zones->shrink_zone
  */
@@ -1209,7 +1227,6 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 	zone->nr_scan_active +=
 		(zone_page_state(zone, NR_ACTIVE) >> priority) + 1;
 	nr_active = zone->nr_scan_active;
-	/*  */
 	if (nr_active >= sc->swap_cluster_max)
 		zone->nr_scan_active = 0;
 	else
@@ -1246,6 +1263,7 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 			nr_to_scan = min(nr_inactive,
 					(unsigned long)sc->swap_cluster_max);
 			nr_inactive -= nr_to_scan;
+			/* shrink_inactive_list()返回本次实际回收的页数 */
 			nr_reclaimed += shrink_inactive_list(nr_to_scan, zone,
 								sc);
 		}
@@ -1919,6 +1937,13 @@ module_init(kswapd_init)
  */
 int zone_reclaim_mode __read_mostly;
 
+/**
+ * zone_reclaim_mode可设置的值
+ * 当zone_reclaim_mode为0时，表示关闭zone_reclaim模式，直接从下一个zone请求分配
+ * 当zone_reclaim_mode为1时，表示打开zone_reclaim模式，先在本zone回收内存再判断是否满足分配请求，若依旧不满足则向下一个zone请求
+ * 当zone_reclaim_mode为2时，表示可通过将cache中的脏数据写会硬盘进行内存回收
+ * 当zone_reclaim_mode为4时，表示可通过swap方式回收内存
+ */
 #define RECLAIM_OFF 0
 #define RECLAIM_ZONE (1<<0)	/* Run shrink_cache on the zone */
 #define RECLAIM_WRITE (1<<1)	/* Writeout pages during reclaim */
@@ -1955,7 +1980,9 @@ static int __zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 	int priority;
 	unsigned long nr_reclaimed = 0;
 	struct scan_control sc = {
+		/* 是否会将cache脏数据写回磁盘以回收内存 */
 		.may_writepage = !!(zone_reclaim_mode & RECLAIM_WRITE),
+		/* 是否会执行swap换页操作以回收内存 */
 		.may_swap = !!(zone_reclaim_mode & RECLAIM_SWAP),
 		.swap_cluster_max = max_t(unsigned long, nr_pages,
 					SWAP_CLUSTER_MAX),
@@ -1975,6 +2002,12 @@ static int __zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 	reclaim_state.reclaimed_slab = 0;
 	p->reclaim_state = &reclaim_state;
 
+	/**
+	 * 回收cache (缓存从文件中读取的数据) 页缓存
+	 *
+	 * pgdat->min_unmapped_pages是“/proc/sys/vm/min_unmapped_ratio”乘上zone总可用页数，表示页缓存内存回收阈值
+	 * 页缓存中潜在可回收页数如果大于pgdat->min_unmapped_pages才进行页回收（LRU回收算法）
+	 */
 	if (zone_page_state(zone, NR_FILE_PAGES) -
 		zone_page_state(zone, NR_FILE_MAPPED) >
 		zone->min_unmapped_pages) {
@@ -1990,6 +2023,12 @@ static int __zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 		} while (priority >= 0 && nr_reclaimed < nr_pages);
 	}
 
+	/**
+	 * 回收slab对象缓存
+	 *
+	 * pgdat->min_slab_pages 是 “/proc/sys/vm/min_slab_ratio”乘上zone总可用页数，表示slab缓存内存回收阈值
+	 * slab缓存中NR_SLAB_RECLAIMABLE可回收页数如果大于pgdat->min_slab_pages才进行页回收
+	 */
 	slab_reclaimable = zone_page_state(zone, NR_SLAB_RECLAIMABLE);
 	if (slab_reclaimable > zone->min_slab_pages) {
 		/*
@@ -2017,9 +2056,16 @@ static int __zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 
 	p->reclaim_state = NULL;
 	current->flags &= ~(PF_MEMALLOC | PF_SWAPWRITE);
+	/* 实际回收内存页数大于所需页数，则返回成功，否则失败 */
 	return nr_reclaimed >= nr_pages;
 }
 
+/**
+ * 内存回收入口
+ * NUMA架构下，用于在区域水位线不满足分配需求，且zone_reclaim_mode非0时，回收zone区域内存
+ *
+ * 返回0表示回收失败，非0表示回收内存成功（回收的页数大于所需的order阶数）
+ */
 int zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 {
 	int node_id;
@@ -2035,6 +2081,7 @@ int zone_reclaim(struct zone *zone, gfp_t gfp_mask, unsigned int order)
 	 * if less than a specified percentage of the zone is used by
 	 * unmapped file backed pages.
 	 */
+	/* 页缓存中潜在可回收页数小于页缓存内存回收阈值，并且slab对象缓存中可回收的页数小于slab回收阈值时，表示无法进行内存回收，直接返回失败 */
 	if (zone_page_state(zone, NR_FILE_PAGES) -
 	    zone_page_state(zone, NR_FILE_MAPPED) <= zone->min_unmapped_pages
 	    && zone_page_state(zone, NR_SLAB_RECLAIMABLE)

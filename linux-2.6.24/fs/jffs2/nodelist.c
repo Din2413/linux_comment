@@ -627,8 +627,12 @@ struct jffs2_raw_node_ref *jffs2_link_node_ref(struct jffs2_sb_info *c,
 	dbg_noderef("New ref is %p (%08x becomes %08x,%p) len 0x%x\n", ref, 
 		    ref->flash_offset, ofs, ref->next_in_ino, len);
 
+	/* 数据实体在flash分区上的逻辑偏移 */
 	ref->flash_offset = ofs;
 
+	/**
+	 * 擦除块的第一个数据实体jffs2_raw_node_ref描述符由jeb->first_node指向，最后一个由jeb->last_node指向
+	 */
 	if (!jeb->first_node) {
 		jeb->first_node = ref;
 		BUG_ON(ref_offset(ref) != jeb->offset);
@@ -643,6 +647,9 @@ struct jffs2_raw_node_ref *jffs2_link_node_ref(struct jffs2_sb_info *c,
 	}
 	jeb->last_node = ref;
 
+	/**
+	 * 同一文件的所有数据实体jffs2_raw_node_ref描述符以循环链表的形式组织，由ic->nodes指向
+	 */
 	if (ic) {
 		ref->next_in_ino = ic->nodes;
 		ic->nodes = ref;
@@ -650,6 +657,10 @@ struct jffs2_raw_node_ref *jffs2_link_node_ref(struct jffs2_sb_info *c,
 		ref->next_in_ino = NULL;
 	}
 
+	/**
+	 * jffs2数据实体按照4字节地址对齐，描述符的flash_offset最低两个bit总是0
+	 * 因此可以利用它们标记对应数据实体的状态
+	 */
 	switch(ref_flags(ref)) {
 	case REF_UNCHECKED:
 		c->unchecked_size += len;
