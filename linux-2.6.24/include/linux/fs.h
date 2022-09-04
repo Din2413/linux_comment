@@ -438,9 +438,11 @@ static inline size_t iov_iter_count(struct iov_iter *i)
 	return i->count;
 }
 
-
+/* 后备存储区关联的操作函数列表 */
 struct address_space_operations {
+	/* 将页写入后备存储区 */
 	int (*writepage)(struct page *page, struct writeback_control *wbc);
+	/* 从后备存储区读入页 */
 	int (*readpage)(struct file *, struct page *);
 	void (*sync_page)(struct page *);
 
@@ -505,13 +507,15 @@ struct address_space {
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
 	rwlock_t		tree_lock;	/* and rwlock protecting it */
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
-	/* 优先查找数，用于建立文件中某一区域与映射该区域的所有虚拟地址空间之间的关联 */
+	/* 线性映射区的优先查找数，用于建立文件中某一区域与映射该区域的所有虚拟地址空间之间的关联 */
 	struct prio_tree_root	i_mmap;		/* tree of private and shared mappings */
+	/* 非线性映射区的双向链表 */
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	spinlock_t		i_mmap_lock;	/* protect tree, count, list */
 	unsigned int		truncate_count;	/* Cover race condition with truncate */
 	unsigned long		nrpages;	/* number of total pages */
 	pgoff_t			writeback_index;/* writeback starts here */
+	/* 后备存储区关联的操作函数列表，用于读入或写出页帧到后备存储区 */
 	const struct address_space_operations *a_ops;	/* methods */
 	unsigned long		flags;		/* error bits/gfp mask */
 	struct backing_dev_info *backing_dev_info; /* device readahead, etc */

@@ -2061,12 +2061,22 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (!pte_unmap_same(mm, pmd, page_table, orig_pte))
 		goto out;
 
+	/* 转换成swap分区中标识页位置的标签 */
 	entry = pte_to_swp_entry(orig_pte);
 	if (is_migration_entry(entry)) {
 		migration_entry_wait(mm, pmd, address);
 		goto out;
 	}
 	delayacct_set_flag(DELAYACCT_PF_SWAPIN);
+	/**
+	 * 优先查询swap缓存
+	 *
+	 * 匿名页可被多进程共享，共享匿名页被换出到swap分区后再次换入时，
+	 * 除开当前触发缺页异常的进程会更换对应位置的pte页表项，其他共享该页的
+	 * 进程对应位置的pte页表项还是执行swap分区的页换出位置，为避免后续进程
+	 * 再去从swap分区I/O换入页帧，将初次换入的页放入swap缓存，进程直接从
+	 * swap缓存获取
+	 */
 	page = lookup_swap_cache(entry);
 	if (!page) {
 		grab_swap_token(); /* Contend for token _before_ read-in */

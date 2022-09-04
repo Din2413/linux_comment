@@ -1049,6 +1049,19 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
 	return fd;
 }
 
+/**
+ * 访问文件的模式有多种，具体如下所示：
+ * 1、规范模式：标志O_SYNC与O_DIRECT清0，文件内容由系统调用read()和write()存取，
+ * 前者阻塞调用进程，后者在数据被拷贝到页高速缓存（延迟写）后立马返回；
+ * 2、同步模式：标志O_SYNC置1，这个标志只影响写操作，它将阻塞调用进程，直到数据
+ * 被有效地写入磁盘；
+ * 3、内存映射模式：mmap()系统调用将文件映射到内存中，文件就成为RAM中的一个字节
+ * 数组，调用进程可直接访问数组元素，而不需用系统调用read()、write()；
+ * 4、直接I/O模式：标志O_DIRECT置1，任何读写操作都将数据在用户态地址空间与磁盘间
+ * 直接传送，而不通过页高速缓存；
+ * 5、异步模式：通过一组POSIX API或linux特有的系统调用实现，数据传输请求并不阻塞
+ * 调用进程，而是在后台执行，同时应用程序继续它的正常运行；
+ */
 asmlinkage long sys_open(const char __user *filename, int flags, int mode)
 {
 	long ret;

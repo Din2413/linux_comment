@@ -202,6 +202,12 @@ EXPORT_SYMBOL(mark_page_accessed);
  * lru_cache_add: add a page to the page lists
  * @page: the page to add
  */
+/**
+ * 如果页不在LRU链表中，将页插入管理区的非活动链表
+ * 并没有立刻移到LRU链表，而是在每cpu的pagevec类型的临时数据结构中聚集这些页
+ * 只有当一个pagevec结构写满时，才会将页真正移动到LRU链表中
+ * （这样可以改善系统性能，只有当LRU链表实际修改时才获得LRU自旋锁）
+ */
 void fastcall lru_cache_add(struct page *page)
 {
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvecs);

@@ -466,7 +466,7 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 
 
 /*
- * 真正初始化VFS超计划super_block数据结构 
+ * 真正初始化VFS超级块super_block数据结构 
  * 为flash上所有数据实体创建内核描述符jffs2_raw_node_ref、为所有文件创建内核描述符jffs2_inode_cache
  */
 int jffs2_do_fill_super(struct super_block *sb, void *data, int silent)

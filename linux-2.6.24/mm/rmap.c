@@ -389,6 +389,11 @@ static int page_referenced_file(struct page *page)
  * Quick test_and_clear_referenced for all mappings to a page,
  * returns the number of ptes which referenced the page.
  */
+/**
+ * 如果PG_referenced标志或页表项中某些Accessed标志位置位，则返回非0，否则返回0
+ * 该函数首先检查页描述符的PG_referenced标志，如果标志置位则清0，然后使用反向映射
+ * 方法，对引用该页的所有用户态页表项的Accessed标志位进行检查并清0
+ */
 int page_referenced(struct page *page, int is_locked)
 {
 	int referenced = 0;
@@ -880,6 +885,7 @@ static int try_to_unmap_file(struct page *page, int migration)
 	unsigned int mapcount;
 
 	spin_lock(&mapping->i_mmap_lock);
+	/* 文件线性映射区 */
 	vma_prio_tree_foreach(vma, &iter, &mapping->i_mmap, pgoff, pgoff) {
 		ret = try_to_unmap_one(page, vma, migration);
 		if (ret == SWAP_FAIL || !page_mapped(page))
@@ -889,6 +895,7 @@ static int try_to_unmap_file(struct page *page, int migration)
 	if (list_empty(&mapping->i_mmap_nonlinear))
 		goto out;
 
+	/* 文件非线性映射区 */
 	list_for_each_entry(vma, &mapping->i_mmap_nonlinear,
 						shared.vm_set.list) {
 		if ((vma->vm_flags & VM_LOCKED) && !migration)

@@ -884,6 +884,7 @@ void do_generic_mapping_read(struct address_space *mapping,
 	unsigned int prev_offset;
 	int error;
 
+	/* 文件数据以页大小缓存在文件对应的页高速缓存中，该页高速缓存由mapping->page_tree优先查找树指向 */
 	index = *ppos >> PAGE_CACHE_SHIFT;
 	prev_index = ra->prev_pos >> PAGE_CACHE_SHIFT;
 	prev_offset = ra->prev_pos & (PAGE_CACHE_SIZE-1);
@@ -1039,11 +1040,13 @@ no_cached_page:
 		 * Ok, it wasn't cached, so we need to create a new
 		 * page..
 		 */
+		/* 请求数据不在页高速缓存中，分配新页 */
 		page = page_cache_alloc_cold(mapping);
 		if (!page) {
 			desc->error = -ENOMEM;
 			goto out;
 		}
+		/* 将新页插入页高速缓存中，并插入所属管理区的LRU链表中 */
 		error = add_to_page_cache_lru(page, mapping,
 						index, GFP_KERNEL);
 		if (error) {
@@ -1053,6 +1056,7 @@ no_cached_page:
 			desc->error = error;
 			goto out;
 		}
+		/* 开始读取文件数据到新页 */
 		goto readpage;
 	}
 
@@ -1165,11 +1169,13 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	loff_t *ppos = &iocb->ki_pos;
 
 	count = 0;
+	/* 调用access_ok()检查iovec描述符所描述的用户态缓冲区是否有效，并统计有效总长度存入count */
 	retval = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
 	if (retval)
 		return retval;
 
 	/* coalesce the iovecs and go direct-to-BIO for O_DIRECT */
+	/* O_DIRECT标签置位表示直接I/O模式，读写操作在用户态地址空间与磁盘空间直接进行，而不经过页高速缓存 */
 	if (filp->f_flags & O_DIRECT) {
 		loff_t size;
 		struct address_space *mapping;
@@ -1196,6 +1202,7 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	retval = 0;
 	if (count) {
 		for (seg = 0; seg < nr_segs; seg++) {
+			/* 读操作描述符，存放与单个用户态缓存相关的文件读操作的当前状态 */
 			read_descriptor_t desc;
 
 			desc.written = 0;
@@ -1204,6 +1211,7 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 			if (desc.count == 0)
 				continue;
 			desc.error = 0;
+			/* 从磁盘读入所请求的页并把拷贝目标数据到用户态缓冲区 */
 			do_generic_file_read(filp,ppos,&desc,file_read_actor);
 			retval += desc.written;
 			if (desc.error) {

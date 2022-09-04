@@ -1087,6 +1087,7 @@ static void shrink_active_list(unsigned long nr_pages, struct zone *zone,
 		 * Now use this metric to decide whether to start moving mapped
 		 * memory onto the inactive list.
 		 */
+		/* 当交换倾向经验值大于等于100时，内存回收才会对属于进程用户态地址空间的页框进行回收(只是决定是否从active链表移动到inactive，inactive内的用户空间页框回收不受该值影响) */
 		if (swap_tendency >= 100)
 force_reclaim_mapped:
 			reclaim_mapped = 1;
@@ -1110,10 +1111,10 @@ force_reclaim_mapped:
 		if (page_mapped(page)) {
 			/*
 			 * 当满足以下条件时，不能回收进程用户态地址空间的页框，将页框移动到l_active链表
-			 * 1、scan_control的may_swap指定为0；
-			 * 2、scan_control的may_swap指定为1，但当前管理区未接近oom（zone_is_near_oom判断）或交换倾向swap_tendency小于100；
-			 * 3、total_swap_pages指定系统可将anonymous page交换到磁盘的大小为0，且当前页框为匿名页；
-			 * 4、page_referenced为true，指定当前页框最近被访问过，根据局部性原理，该页框后面还可能需要被访问；
+			 * 1、交换倾向swap_tendency小于100；
+			 * 2、匿名页、且没有激活的交换区；
+			 * 3、page_referenced为true，指定当前页框最近被访问过，根据局部性原理，该页框后面还可能需要被访问；
+			 * （但page_referenced会将引用标志清除，防止下次回收操作时还认为该页最近被访问过）
 			 */
 			if (!reclaim_mapped ||
 			    (total_swap_pages == 0 && PageAnon(page)) ||
@@ -1403,7 +1404,7 @@ unsigned long try_to_free_pages(struct zone **zones, int order, gfp_t gfp_mask)
 			congestion_wait(WRITE, HZ/10);
 	}
 	/* top priority shrink_caches still had more to do? don't OOM, then */
-	/* 执行13次循环都未达到内存回收目标，且所有管理区已分配的页框均不可回收，依旧返回成功避免触发oom */
+	/* 执行13次循环都未达到内存回收目标，且所有管理区已分配的页框均不可回收，依旧返回失败避免触发oom */
 	if (!sc.all_unreclaimable)
 		ret = 1;
 out:
@@ -1478,10 +1479,14 @@ loop_again:
 	for (i = 0; i < pgdat->nr_zones; i++)
 		temp_priority[i] = DEF_PRIORITY;
 
-	/*
+	/**
 	 * 扫描优先级，代表一次扫描(total_size >> priority)个页框
 	 * 数值越大，优先级越低，一次扫描的页框数量就越少
 	 * 数值越小，优先级越高（越紧急），一次扫描的叶框数量就越多
+	 *
+	 * 如果页回收掠夺性过强，就会有过多的页从活动链表被移动到非活动链表，也就会回收大量的页框，系统性能也会收到影响
+	 * 相反，如果页回收太过懒惰，就没有足够的未用页补充非活动链表，也就不能回收足够的内存以补充内存分配请求
+	 * 因此，为了可以调整页回收的行为，开始时扫描少量的页，直到很难回收内存时，才逐渐增加扫描的页数
 	 */
 	for (priority = DEF_PRIORITY; priority >= 0; priority--) {
 		int end_zone = 0;	/* Inclusive.  0 = ZONE_DMA */

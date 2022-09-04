@@ -97,7 +97,7 @@ int jffs2_scan_medium(struct jffs2_sb_info *c)
 	size_t pointlen;
 
 	/**
-	 * NOR flash允许“就地允许”（XIP，即eXecute_In_Place），读NOR flash的操作与读sdram类似，
+	 * NOR flash允许“就地执行”（XIP，即eXecute_In_Place），读NOR flash的操作与读sdram类似，
 	 * 而flash驱动中的读方法(read)本地操作为memcpy，因此通过内存映射读取NOR flash比通过驱动读方法要节约一次内存拷贝
 	 * 
 	 * 如果NOR flash驱动程序实现了point和unpoint方法，则允许建立内存映射，并通过映射的方式读取
