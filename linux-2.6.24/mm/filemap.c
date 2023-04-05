@@ -608,6 +608,7 @@ void fastcall __lock_page_nosync(struct page *page)
  * Is there a pagecache struct page at the given (mapping, offset) tuple?
  * If yes, increment its refcount and return it; if no, return NULL.
  */
+/* 搜索指定的文件数据偏移量是否在address_space基树中有对应的高速缓存页 */
 struct page * find_get_page(struct address_space *mapping, pgoff_t offset)
 {
 	struct page *page;
@@ -678,6 +679,7 @@ EXPORT_SYMBOL(find_lock_page);
  * find_or_create_page() returns the desired page's address, or zero on
  * memory exhaustion.
  */
+/* 优先从文件的页高速缓存搜查指定偏移位置的页，如果找不到所请求的页，则分配一个新页并把它插入页高速缓存中 */
 struct page *find_or_create_page(struct address_space *mapping,
 		pgoff_t index, gfp_t gfp_mask)
 {
@@ -717,6 +719,7 @@ EXPORT_SYMBOL(find_or_create_page);
  *
  * find_get_pages() returns the number of pages which were found.
  */
+/* 在高速缓存中查找一组具有相邻索引的高速缓存页 */
 unsigned find_get_pages(struct address_space *mapping, pgoff_t start,
 			    unsigned int nr_pages, struct page **pages)
 {

@@ -51,6 +51,16 @@ struct radix_tree_node {
 	unsigned int	count;
 	struct rcu_head	rcu_head;
 	void		*slots[RADIX_TREE_MAP_SIZE];
+	/**
+	 * 内核需要从高速缓存获得属于指定所有者的所有页和脏页，如果绝大多数页都不是脏页，
+	 * 遍历整个基数以顺序访问所有叶子节点的操作就太低效了。
+	 *
+	 * 为了快速搜索高速缓存中的脏页，基树为每个中间节点都包含一个针对每个孩子节点的脏标记，
+	 * 当有且至少有一个孩子节点的脏标记被置位时这个标记被设置。
+	 *
+	 * 通过这种方式，当内核遍历基树搜索脏页时，就可以跳过标记为0（不为脏的）的中间节点的所有子树，加大搜索整个基树的效率。
+	 * 同理，表示页正在被写回磁盘的PG_writeback标志也利用此想法进行标记与遍历。
+	 */
 	unsigned long	tags[RADIX_TREE_MAX_TAGS][RADIX_TREE_TAG_LONGS];
 };
 

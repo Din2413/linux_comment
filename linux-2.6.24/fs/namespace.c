@@ -1128,6 +1128,7 @@ int do_add_mount(struct vfsmount *newmnt, struct nameidata *nd,
 		goto unlock;
 
 	newmnt->mnt_flags = mnt_flags;
+	/* 把新安装的文件系统对象插入到namespace链表、散列表及父文件系统的子链表 */
 	if ((err = graft_tree(newmnt, nd)))
 		goto unlock;
 
@@ -1418,16 +1419,22 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
 	/* Separate the per-mountpoint flags */
+	/* 挂载标志，禁止setuid和setgid标志 */
 	if (flags & MS_NOSUID)
 		mnt_flags |= MNT_NOSUID;
+	/* 挂载标志，禁止访问设备文件 */
 	if (flags & MS_NODEV)
 		mnt_flags |= MNT_NODEV;
+	/* 挂载标志，不允许程序执行 */
 	if (flags & MS_NOEXEC)
 		mnt_flags |= MNT_NOEXEC;
+	/* 挂载标志，不更新文件访问时间 */
 	if (flags & MS_NOATIME)
 		mnt_flags |= MNT_NOATIME;
+	/* 挂载标志，不更新目录访问时间 */
 	if (flags & MS_NODIRATIME)
 		mnt_flags |= MNT_NODIRATIME;
+	/* 挂载标志，只有当文件上一次访问时间戳小于或等于最后一次修改或状态变更的时间戳时，对其进行更新访问时间 */
 	if (flags & MS_RELATIME)
 		mnt_flags |= MNT_RELATIME;
 
@@ -1447,12 +1454,12 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (flags & MS_REMOUNT)
 		retval = do_remount(&nd, flags & ~MS_REMOUNT, mnt_flags,
 				    data_page);
-	/* 创建一个“绑定安装”，已安装文件系统在系统目录树的另一个文件或目录可见 */
+	/* 创建一个“绑定安装”，已安装文件系统在系统目录树的另一个文件或目录可见，使用方式mount --bind 或者 mount -o bind */
 	else if (flags & MS_BIND)
 		retval = do_loopback(&nd, dev_name, flags & MS_REC);
 	else if (flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
 		retval = do_change_type(&nd, flags);
-	/* 改变已安装文件系统的安装点 */
+	/* 改变已安装文件系统的安装点，使用方式mount --move 或者 mount -o move */
 	else if (flags & MS_MOVE)
 		retval = do_move_mount(&nd, dev_name);
 	/* 安装一个特殊文件系统或存放在磁盘分区中的普通文件系统 */

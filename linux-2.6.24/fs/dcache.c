@@ -59,6 +59,10 @@ static struct kmem_cache *dentry_cache __read_mostly;
 
 static unsigned int d_hash_mask __read_mostly;
 static unsigned int d_hash_shift __read_mostly;
+/**
+ * 目录项对象高速缓存，hash-map结构
+ * 极大地加速了通过文件名获得相应索引节点的速度，其可避免路径名的解析从磁盘读取中间目录
+ */
 static struct hlist_head *dentry_hashtable __read_mostly;
 static LIST_HEAD(dentry_unused);
 

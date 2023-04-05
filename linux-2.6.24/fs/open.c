@@ -1033,6 +1033,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
 	int fd = PTR_ERR(tmp);
 
 	if (!IS_ERR(tmp)) {
+		/* 获取当前进程下一个未使用的文件描述符 */
 		fd = get_unused_fd_flags(flags);
 		if (fd >= 0) {
 			struct file *f = do_filp_open(dfd, tmp, flags, mode);
@@ -1041,6 +1042,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
 				fd = PTR_ERR(f);
 			} else {
 				fsnotify_open(f->f_path.dentry);
+				/* 将文件描述符和文件对象指针绑定，并存入当前进程的文件描述符表 */
 				fd_install(fd, f);
 			}
 		}
@@ -1050,7 +1052,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
 }
 
 /**
- * 访问文件的模式有多种，具体如下所示：
+ * 访问文件的模式mode有多种，具体如下所示：
  * 1、规范模式：标志O_SYNC与O_DIRECT清0，文件内容由系统调用read()和write()存取，
  * 前者阻塞调用进程，后者在数据被拷贝到页高速缓存（延迟写）后立马返回；
  * 2、同步模式：标志O_SYNC置1，这个标志只影响写操作，它将阻塞调用进程，直到数据

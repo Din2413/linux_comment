@@ -504,6 +504,11 @@ struct address_space {
 	 * 每次创建一个文件对象file
 	 */
 	struct inode		*host;		/* owner: inode, block_device */
+	/**
+	 * 文件页高速缓存基树的根
+	 * 为实现页高速缓存的高效查找，每个address_space对象对应一个搜索树，由所属该文件的所有页高速缓存组成
+	 * 基树的每个节点可以有多到64个指针指向其他节点或页描述符，底层节点（叶子节点）存放指向页描述符的指针，上层节点（分支节点）存放指向其他节点的指针
+	 */
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
 	rwlock_t		tree_lock;	/* and rwlock protecting it */
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
@@ -1462,9 +1467,11 @@ struct file_system_type {
 	/* 读取文件系统超级块的方法 */
 	int (*get_sb) (struct file_system_type *, int,
 		       const char *, void *, struct vfsmount *);
+	/* 删除文件系统超级块的方法 */
 	void (*kill_sb) (struct super_block *);
 	struct module *owner;
 	struct file_system_type * next;
+	/* 给定类型的已安装文件系统所对应的超级块链表的头 */
 	struct list_head fs_supers;
 
 	struct lock_class_key s_lock_key;

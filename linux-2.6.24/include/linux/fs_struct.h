@@ -4,10 +4,16 @@
 struct dentry;
 struct vfsmount;
 
+/* 进程与文件系统相互作用的数据 */
 struct fs_struct {
 	atomic_t count;
 	rwlock_t lock;
 	int umask;
+	/*
+	 * 每个进程都有它自己当前的工作目录和它自己的根目录
+	 * root表示根目录的目录项对象、pwd表示当前工作目录的目录项对象、altroot表示模拟根目录的目录项
+	 * rootmnt表示根目录所安装的文件系统对象、pwdmnt表示当前工作目录所安装的文件系统对象、altrootmnt表示模拟根目录所安装的文件系统对象
+	 */
 	struct dentry * root, * pwd, * altroot;
 	struct vfsmount * rootmnt, * pwdmnt, * altrootmnt;
 };

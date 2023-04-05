@@ -27,9 +27,13 @@ struct embedded_fd_set {
 };
 
 struct fdtable {
+	/* 文件对象的当前最大数目 */
 	unsigned int max_fds;
+	/* 指向文件对象指针数组的指针 */
 	struct file ** fd;      /* current fd array */
+	/* 指向指向exec()时需要关闭的文件描述符的指针 */
 	fd_set *close_on_exec;
+	/* 指向打开文件描述符的指针 */
 	fd_set *open_fds;
 	struct rcu_head rcu;
 	struct fdtable *next;
@@ -37,21 +41,31 @@ struct fdtable {
 
 /*
  * Open file table structure
+ * 进程当前打开的文件表
  */
 struct files_struct {
   /*
-   * read mostly part
+   * read mostly part 共享该表的进程数目
    */
 	atomic_t count;
+	/**
+	 * 进程当前打开文件的文件描述符表，初始时默认指向files_struct结构的fdtab字段
+	 * 最大可以保存32个文件描述符，当超过限制时，需要重新分配fatable结构对象并将fdtab拷贝过去，并设置fdt指向
+	 */
 	struct fdtable *fdt;
+	/* 打开文件的文件描述符表的初始集合 */
 	struct fdtable fdtab;
   /*
    * written part on a separate cache line in SMP
    */
 	spinlock_t file_lock ____cacheline_aligned_in_smp;
+	/* 所分配的最大文件描述符加1 */
 	int next_fd;
+	/* 指向指向exec()时需要关闭的文件描述符的初始集合 */
 	struct embedded_fd_set close_on_exec_init;
+	/* 文件描述符的初始集合 */
 	struct embedded_fd_set open_fds_init;
+	/* 文件对象指针的初始数组 */
 	struct file * fd_array[NR_OPEN_DEFAULT];
 };
 

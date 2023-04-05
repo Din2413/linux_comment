@@ -14,12 +14,17 @@ struct open_intent {
 
 enum { MAX_NESTED_LINKS = 8 };
 
+/* 存放文件路径查找操作的结果 */
 struct nameidata {
+	/* 所解析的最后一个路径分量的目录项对象 */
 	struct dentry	*dentry;
+	/* 所解析的最后一个路径分量的已安装文件系统对象 */
 	struct vfsmount *mnt;
+	/* 路径名的最后一个分量 */
 	struct qstr	last;
 	unsigned int	flags;
 	int		last_type;
+	/* 符号连接嵌套的当前级别 */
 	unsigned	depth;
 	char *saved_names[MAX_NESTED_LINKS + 1];
 
@@ -47,6 +52,17 @@ enum {LAST_NORM, LAST_ROOT, LAST_DOT, LAST_DOTDOT, LAST_BIND};
  *  - internal "there are more path compnents" flag
  *  - locked when lookup done with dcache_lock held
  *  - dentry cache is untrusted; force a real lookup
+ */
+/**
+ * 文件路径名查找标志
+ * LOOKUP_FOLLOW：如果最后一个分量是符号链接，则解释（追踪）它
+ * LOOKUP_DIRECTORY：最后一个分量必须是目录
+ * LOOKUP_CONTINUE：在路径名中还有文件名要检查
+ * LOOKUP_PARENT：查找最后一个分量名所在的目录
+ * LOOKUP_NOALT：不考虑模拟根目录
+ * LOOKUP_OPEN：试图打开一个文件
+ * LOOKUP_CREATE：试图创建一个文件（如果不存在）
+ * LOOKUP_ACCESS：试图为一个文件检查用户的权限
  */
 #define LOOKUP_FOLLOW		 1
 #define LOOKUP_DIRECTORY	 2

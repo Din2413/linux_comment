@@ -834,6 +834,10 @@ int get_sb_single(struct file_system_type *fs_type,
 	struct super_block *s;
 	int error;
 
+	/**
+	 * 特殊文件系统不限于物理设备，但是内核给每个安装的特殊文件系统分配一个虚拟的块设备，其主设备号为0，次设备号为不相等的任意值
+	 * set_anon_super()本质上既是为特殊文件系统分配一个未使用的次设备号，与之对应的是kill_anon_super()函数释放特殊文件系统的次设备号
+	 */
 	s = sget(fs_type, compare_single, set_anon_super, NULL);
 	if (IS_ERR(s))
 		return PTR_ERR(s);

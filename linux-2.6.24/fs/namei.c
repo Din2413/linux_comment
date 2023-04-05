@@ -120,6 +120,10 @@ static int do_getname(const char __user *filename, char *page)
 	int retval;
 	unsigned long len = PATH_MAX;
 
+	/**
+	 * 对系统调用传递到内核的地址进行检查
+	 * 如果进程的最大访问空间限制没有扩大到KERNEL_DS（内核线程可以访问内核空间），则只能访问用户空间，地址上限应该为TASK_SIZE
+	 */
 	if (!segment_eq(get_fs(), KERNEL_DS)) {
 		if ((unsigned long) filename >= TASK_SIZE)
 			return -EFAULT;
@@ -785,6 +789,7 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		     struct path *path)
 {
 	struct vfsmount *mnt = nd->mnt;
+	/* 调用__d_lookup()在目录项高速缓存中搜索路径分量对应的目录项对象 */
 	struct dentry *dentry = __d_lookup(nd->dentry, name);
 
 	if (!dentry)
@@ -797,6 +802,10 @@ done:
 	__follow_mount(path);
 	return 0;
 
+	/**
+	 * 目录项高速缓存未命中，则调用文件系统索引节点的lookup方法从文件系统中读取目录
+	 * 创建一个新的目录项对象并把它插入到目录项高速缓存中
+	 */
 need_lookup:
 	dentry = real_lookup(nd->dentry, name, nd);
 	if (IS_ERR(dentry))
@@ -865,9 +874,11 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		this.hash = end_name_hash(hash);
 
 		/* remove trailing slashes? */
+		/* 最后一个路径分量且不以"/"结尾 */
 		if (!c)
 			goto last_component;
 		while (*++name == '/');
+		/* 最后一个路径分量且以"/"结尾 */
 		if (!*name)
 			goto last_with_slashes;
 
@@ -882,10 +893,15 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 			case 2:	
 				if (this.name[1] != '.')
 					break;
+				/**
+				 * 分量名是".."，则尝试回到父目录继续查找
+				 * 父目录可能是文件系统目录树的挂载点，调用follow_dotdot()函数向上延申新的文件系统，直到遍历到当前进程的根文件系统根目录为止
+				 */
 				follow_dotdot(nd);
 				inode = nd->dentry->d_inode;
 				/* fallthrough */
 			case 1:
+				/* 分量名是"."，则尝试回到当前目录继续查找 */
 				continue;
 		}
 		/*
@@ -898,6 +914,10 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 				break;
 		}
 		/* This does the actual lookups.. */
+		/**
+		 * 如果分量路径名既不是"."，也不是".."，则调用do_lookup()查找给定父目录nd->dentry和要解析的路径名分量相关的目录项对象
+		 * 首先在目录项高速缓存中查找，如果不在文件路径名对应的目录项不在高速缓存中，则尝试从文件系统中进行查找
+		 */
 		err = do_lookup(nd, &this, &next);
 		if (err)
 			break;
@@ -910,6 +930,7 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		if (!inode->i_op)
 			goto out_dput;
 
+		/* 检查刚解析的路径分量是否指向一个符号链接（next.dentry->d_inode具体一个自定义的follow_link方法） */
 		if (inode->i_op->follow_link) {
 			err = do_follow_link(&next, nd);
 			if (err)
@@ -924,6 +945,7 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		} else
 			path_to_nameidata(&next, nd);
 		err = -ENOTDIR; 
+		/* 检查刚解析的路径分量是否指向一个目录（next.dentry->d_inode具有一个自定义的lookup方法） */
 		if (!inode->i_op->lookup)
 			break;
 		continue;
@@ -936,6 +958,7 @@ last_component:
 		nd->flags &= lookup_flags | ~LOOKUP_CONTINUE;
 		if (lookup_flags & LOOKUP_PARENT)
 			goto lookup_parent;
+		/* 如果最后一个路径分量是"."或者".." */
 		if (this.name[0] == '.') switch (this.len) {
 			default:
 				break;
@@ -1128,6 +1151,7 @@ static int fastcall do_path_lookup(int dfd, const char *name,
 	nd->flags = flags;
 	nd->depth = 0;
 
+	/* 文件路径名是绝对路径，则从当前进程的根文件系统根目录查找 */
 	if (*name=='/') {
 		read_lock(&fs->lock);
 		if (fs->altroot && !(nd->flags & LOOKUP_NOALT)) {
@@ -1141,11 +1165,13 @@ static int fastcall do_path_lookup(int dfd, const char *name,
 		nd->mnt = mntget(fs->rootmnt);
 		nd->dentry = dget(fs->root);
 		read_unlock(&fs->lock);
+	/* dfd的值为AT_FDCWD,文件路径名是相对于进程当前工作目录的相对路径，则从进程当前目录查找 */
 	} else if (dfd == AT_FDCWD) {
 		read_lock(&fs->lock);
 		nd->mnt = mntget(fs->pwdmnt);
 		nd->dentry = dget(fs->pwd);
 		read_unlock(&fs->lock);
+	/* 文件路径名不是绝对路径且dfd值不是AT_FDCWD,文件路径名是相对于文件描述符dfd指向的目录，而不是进程的当前工作目录 */
 	} else {
 		struct dentry *dentry;
 
@@ -1170,6 +1196,7 @@ static int fastcall do_path_lookup(int dfd, const char *name,
 		fput_light(file, fput_needed);
 	}
 
+	/* 从指定的目录开始遍历搜索文件路径名中的各子目录项 */
 	retval = path_walk(name, nd);
 out:
 	if (unlikely(!retval && !audit_dummy_context() && nd->dentry &&
@@ -1232,6 +1259,7 @@ static int __path_lookup_intent_open(int dfd, const char *name,
 	nd->intent.open.file = filp;
 	nd->intent.open.flags = open_flags;
 	nd->intent.open.create_mode = create_mode;
+	/* 执行路径名查找，如果文件存在则打开，如果不存在且指定O_CREAT标志则创建空文件 */
 	err = do_path_lookup(dfd, name, lookup_flags|LOOKUP_OPEN, nd);
 	if (IS_ERR(nd->intent.open.file)) {
 		if (err == 0) {
@@ -1728,6 +1756,7 @@ int open_namei(int dfd, const char *pathname, int flag,
 	/*
 	 * The simplest case - just a plain lookup.
 	 */
+	/* O_CREAT标志表示文件不存在需创建 */
 	if (!(flag & O_CREAT)) {
 		error = path_lookup_open(dfd, pathname, lookup_flags(flag),
 					 nd, flag);

@@ -6,9 +6,13 @@
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
 
+/**
+ * 文件系统命名空间
+ */
 struct mnt_namespace {
 	atomic_t		count;
 	struct vfsmount *	root;
+	/* 属于该命名空间的、所有已挂载的文件系统描述符vfsmount形成一个双向循环链表，list指向该链表头 */
 	struct list_head	list;
 	wait_queue_head_t poll;
 	int event;
