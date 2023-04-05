@@ -215,6 +215,8 @@
 
 ## 内核空间、用户空间
 
+![进程地址空间](https://github.com/Din2413/linux_comment/blob/bdca191ee5bbe8a0a6b1c8124563a6e90ea65ff8/files/%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4.jpg)
+
 ### 内核空间
 
   uboot加载Linux内核时，通过bootargs启动参数的mem指定系统内存起始地址与大小，这个内存用于Linux内核和上层应用程序运行。mem之外的物理内存则留作他用，比如君正的rmem和nmem。
