@@ -1171,11 +1171,18 @@ int generic_osync_inode(struct inode *, struct address_space *, int);
  */
 typedef int (*filldir_t)(void *, const char *, int, loff_t, u64, unsigned);
 
+/**
+ * 块设备操作表描述符
+ */
 struct block_device_operations {
+	/* 打开块设备文件 */
 	int (*open) (struct inode *, struct file *);
+	/* 关闭对块设备文件的最后一个引用 */
 	int (*release) (struct inode *, struct file *);
+	/* 使用大内核锁在块设备文件上发出ioctl()系统调用 */
 	int (*ioctl) (struct inode *, struct file *, unsigned, unsigned long);
 	long (*unlocked_ioctl) (struct file *, unsigned, unsigned long);
+	/* 不使用大内核锁在块设备文件上发出ioctl()系统调用 */
 	long (*compat_ioctl) (struct file *, unsigned, unsigned long);
 	int (*direct_access) (struct block_device *, sector_t, unsigned long *);
 	int (*media_changed) (struct gendisk *);

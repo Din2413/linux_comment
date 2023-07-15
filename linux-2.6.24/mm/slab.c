@@ -312,7 +312,7 @@ struct kmem_list3 {
 	struct list_head slabs_free;
 	/* 当前结点slab缓存中空闲对象个数 */
 	unsigned long free_objects;
-	/* 当前结点slab缓存中空闲对象上线，超过时需向伙伴系统是否空闲内存块 */
+	/* 当前结点slab缓存中空闲对象上线，超过时需向伙伴系统释放空闲内存块 */
 	unsigned int free_limit;
 	unsigned int colour_next;	/* Per-node cache coloring */
 	spinlock_t list_lock;

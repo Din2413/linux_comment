@@ -81,12 +81,25 @@ struct partition {
 	__le32 nr_sects;		/* nr of sectors in partition */
 } __attribute__((packed));
 
+/**
+ * 存放磁盘分区信息的数据结构
+ */
 struct hd_struct {
+	/* 磁盘中分区的起始扇区 */
 	sector_t start_sect;
+	/* 分区的长度，扇区数 */
 	sector_t nr_sects;
 	struct kobject kobj;
 	struct kobject *holder_dir;
+	/**
+	 * ios[0](reads)表示对分区发出的读操作数、ios[1](writes)表示对分区发出的写操作次数
+	 * sectors[0](read_sectors)表示对分区读取的扇区数、ios[1](write_sectors)表示写进分区的扇区数
+	 */
 	unsigned ios[2], sectors[2];	/* READs and WRITEs */
+	/**
+	 * policy: 如果分区是只读的，则置为1，否则为0
+	 * partno: 磁盘中分区的相对索引
+	 */
 	int policy, partno;
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 	int make_it_fail;
@@ -109,32 +122,57 @@ struct disk_stats {
 	unsigned long io_ticks;
 	unsigned long time_in_queue;
 };
-	
+
+/**
+ * 磁盘是一个由通用块层处理的逻辑块设备
+ * 通常一个磁盘对应一个硬件块设备，例如硬盘、软盘或光盘，
+ * 但也可以是一个虚拟设备，建立在几个物理磁盘分区之上或一些RAM专用页中的内存区上
+ * 
+ * 磁盘是由gendisk对象描述的
+ */
 struct gendisk {
+	/* 磁盘主设备号 */
 	int major;			/* major number of driver */
+	/* 与磁盘关联的第一个次设备号 */
 	int first_minor;
+	/* 与磁盘关联的次设备号范围 */
 	int minors;                     /* maximum number of minors, =1 for
                                          * disks that can't be partitioned. */
+	/* 磁盘的标准名称 */
 	char disk_name[32];		/* name of major driver */
+	/* 磁盘的分区描述符数组(磁盘分区表) */
 	struct hd_struct **part;	/* [indexed by minor] */
 	int part_uevent_suppress;
+	/* 指向块设备操作表的指针 */
 	struct block_device_operations *fops;
+	/* 指向磁盘请求i队列的指针 */
 	struct request_queue *queue;
+	/* 块设备驱动程序的私有数据 */
 	void *private_data;
+	/* 磁盘内存区的大小，扇区数目 */
 	sector_t capacity;
 
+	/**
+	 * 描述磁盘类型的标志
+	 * GENHD_FL_UP:磁盘将初始化并可以使用
+	 * GENHD_FL_REMOVABLE:如果是诸如软盘或光盘这样可移动的磁盘，就要设置该标志
+	 */
 	int flags;
+	/* 指向磁盘硬件设备的device对象的指针 */
 	struct device *driverfs_dev;
 	struct kobject kobj;
 	struct kobject *holder_dir;
 	struct kobject *slave_dir;
 
 	struct timer_rand_state *random;
+	/* 如果磁盘是只读的，则置为1，否则为0 */
 	int policy;
 
+	/* 写入磁盘的扇区数计数器，仅为RAID使用 */
 	atomic_t sync_io;		/* RAID */
 	unsigned long stamp;
 	int in_flight;
+	/* 统计每个cpu使用磁盘的情况 */
 #ifdef	CONFIG_SMP
 	struct disk_stats *dkstats;
 #else

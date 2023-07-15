@@ -789,7 +789,7 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		     struct path *path)
 {
 	struct vfsmount *mnt = nd->mnt;
-	/* 调用__d_lookup()在目录项高速缓存中搜索路径分量对应的目录项对象 */
+	/* 调用__d_lookup()在目录项高速缓存中搜索父目录为nd->dentry、文件名name对应的目录项对象 */
 	struct dentry *dentry = __d_lookup(nd->dentry, name);
 
 	if (!dentry)
@@ -877,11 +877,13 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		/* 最后一个路径分量且不以"/"结尾 */
 		if (!c)
 			goto last_component;
-		while (*++name == '/');
+
 		/* 最后一个路径分量且以"/"结尾 */
+		while (*++name == '/');
 		if (!*name)
 			goto last_with_slashes;
 
+		/* 不属于以上两种情况，则为中间路径分量 */
 		/*
 		 * "." and ".." are special - ".." especially so because it has
 		 * to be able to know about the current root directory and
@@ -901,7 +903,7 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 				inode = nd->dentry->d_inode;
 				/* fallthrough */
 			case 1:
-				/* 分量名是"."，则尝试回到当前目录继续查找 */
+				/* 分量名是"."，则尝试回到当前目录冲洗继续查找 */
 				continue;
 		}
 		/*
@@ -915,8 +917,8 @@ static fastcall int __link_path_walk(const char * name, struct nameidata *nd)
 		}
 		/* This does the actual lookups.. */
 		/**
-		 * 如果分量路径名既不是"."，也不是".."，则调用do_lookup()查找给定父目录nd->dentry和要解析的路径名分量相关的目录项对象
-		 * 首先在目录项高速缓存中查找，如果不在文件路径名对应的目录项不在高速缓存中，则尝试从文件系统中进行查找
+		 * 如果分量路径名既不是"."，也不是".."，则调用do_lookup()查找给定父目录nd->dentry和要解析的路径名分量this.name相关的目录项对象
+		 * 首先在目录项高速缓存中查找，如果文件路径名对应的目录项不在高速缓存中，则尝试从文件系统中进行查找
 		 */
 		err = do_lookup(nd, &this, &next);
 		if (err)

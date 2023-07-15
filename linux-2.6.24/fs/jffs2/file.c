@@ -129,7 +129,6 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 	struct inode *inode = mapping->host;
 	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
 	pgoff_t index = pos >> PAGE_CACHE_SHIFT;
-	uint32_t pageofs = pos & (PAGE_CACHE_SIZE - 1);
 	int ret = 0;
 
 	pg = __grab_cache_page(mapping, index);
@@ -139,7 +138,7 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 
 	D1(printk(KERN_DEBUG "jffs2_write_begin()\n"));
 
-	if (pageofs > inode->i_size) {
+	if (pos > inode->i_size) {
 		/* Make new hole frag from old EOF to new page */
 		struct jffs2_sb_info *c = JFFS2_SB_INFO(inode->i_sb);
 		struct jffs2_raw_inode ri;
@@ -147,7 +146,7 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 		uint32_t alloc_len;
 
 		D1(printk(KERN_DEBUG "Writing new hole frag 0x%x-0x%x between current EOF and new page\n",
-			  (unsigned int)inode->i_size, pageofs));
+			  (unsigned int)inode->i_size, pos));
 
 		ret = jffs2_reserve_space(c, sizeof(ri), &alloc_len,
 					  ALLOC_NORMAL, JFFS2_SUMMARY_INODE_SIZE);
@@ -167,10 +166,10 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 		ri.mode = cpu_to_jemode(inode->i_mode);
 		ri.uid = cpu_to_je16(inode->i_uid);
 		ri.gid = cpu_to_je16(inode->i_gid);
-		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pageofs));
+		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pos));
 		ri.atime = ri.ctime = ri.mtime = cpu_to_je32(get_seconds());
 		ri.offset = cpu_to_je32(inode->i_size);
-		ri.dsize = cpu_to_je32(pageofs - inode->i_size);
+		ri.dsize = cpu_to_je32(pos - inode->i_size);
 		ri.csize = cpu_to_je32(0);
 		ri.compr = JFFS2_COMPR_ZERO;
 		ri.node_crc = cpu_to_je32(crc32(0, &ri, sizeof(ri)-8));
@@ -199,7 +198,7 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 			goto out_page;
 		}
 		jffs2_complete_reservation(c);
-		inode->i_size = pageofs;
+		inode->i_size = pos;
 		up(&f->sem);
 	}
 

@@ -56,9 +56,15 @@
 /*
  * was unsigned short, but we might as well be ready for > 64kB I/O pages
  */
+/**
+ * bio块I/O操作中每个段由一个bio_vec数据结构描述
+ */
 struct bio_vec {
+	/* 指向段所在页框的页描述符指针 */
 	struct page	*bv_page;
+	/* 段的字节长度 */
 	unsigned int	bv_len;
+	/* 页框中段数据的偏移量 */
 	unsigned int	bv_offset;
 };
 
@@ -71,21 +77,27 @@ typedef void (bio_destructor_t) (struct bio *);
  * main unit of I/O for the block layer and lower layers (ie drivers and
  * stacking drivers)
  */
-/*
+/**
+ * 内核利用通用块层启动I/O操作来传送所请求的数据，每个I/O操作只针对磁盘上一组连续的块，每次I/O操作由一个“块I/O”(bio)结构描述
  * 当内核以文件系统、虚拟内存子系统或者系统调用的形式决定从块I/O设备输入、输出块数据时，将结合一个bio结构，用来描述这个操作
  * 该结构被传递给I/O代码，代码会把它合并到一个已经存在的request结构中，或者根据需要再创建一个新的request结构
  */
 struct bio {
+	/* 块I/O操作的第一个磁盘扇区 */
 	sector_t		bi_sector;	/* device address in 512 byte
 						   sectors */
+	/* 链接到请求队列中的下一个bio */
 	struct bio		*bi_next;	/* request queue link */
+	/* 指向块设备描述符的指针 */
 	struct block_device	*bi_bdev;
 	unsigned long		bi_flags;	/* status, command, etc */
 	unsigned long		bi_rw;		/* bottom bits READ/WRITE,
 						 * top bits priority
 						 */
 
+	/* 块I/O操作中bio_vec数组中段的数目 */
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
+	/* 块I/O操作中bio_vec数组中段的当前索引值 */
 	unsigned short		bi_idx;		/* current index into bvl_vec */
 
 	/* Number of segments in this BIO after
@@ -98,6 +110,7 @@ struct bio {
 	 */
 	unsigned short		bi_hw_segments;
 
+	/* 需要传送的字节数 */
 	unsigned int		bi_size;	/* residual I/O count */
 
 	/*
@@ -108,15 +121,21 @@ struct bio {
 	unsigned int		bi_hw_front_size;
 	unsigned int		bi_hw_back_size;
 
+	/* 块I/O操作中bio_vec数组允许的最大段数 */
 	unsigned int		bi_max_vecs;	/* max bvl_vecs we can hold */
 
+	/* 指向块I/O操作中bio_vec数组中的段的指针 */
 	struct bio_vec		*bi_io_vec;	/* the actual vec list */
 
+	/* I/O操作结束时调用的方法 */
 	bio_end_io_t		*bi_end_io;
+	/* bio的引用计数 */
 	atomic_t		bi_cnt;		/* pin count */
 
+	/* 通用块层合块设备驱动程序的I/O完成方法使用的指针 */
 	void			*bi_private;
 
+	/* 释放bio时调用的析构方法 */
 	bio_destructor_t	*bi_destructor;	/* destructor */
 };
 
